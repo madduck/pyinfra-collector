@@ -17,7 +17,7 @@ dev = [
   "pre-commit>=4.7.0",
   "pytest>=9.2.0",
   "pytest-cov>=7.1.0",
-  "pytest-ruff>=0.5",
+  "ruff>=0.17.1",
 ]
 
 [build-system]
@@ -30,7 +30,6 @@ addopts = """
   -ra
   --pdbcls=IPython.terminal.debugger:TerminalPdb
   --cov=pyinfra_collector --cov-report term-missing:skip-covered --no-cov-on-fail
-  --ruff --ruff-format --ruff-config 'lint.ignore = ["I001", "F401", "F841"]'
 """
 log_level = "DEBUG"
 log_format = "%(name)s %(levelname)s %(message)s"

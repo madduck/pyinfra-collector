@@ -11,8 +11,8 @@ and this project adheres to
 ### Added
 
 - `gather()` replaces `register()` and now arms a `PrepareEndFlush` callback on
-  the current run, so pyinfra collects gathered facts automatically at the end of
-  the prepare phase. Nothing new to call in a deploy.
+  the current run, so pyinfra collects gathered facts automatically at the end
+  of the prepare phase. Nothing new to call in a deploy.
 
 ### Fixed
 
@@ -23,6 +23,11 @@ and this project adheres to
 
 ### Changed
 
+- Ruff no longer runs from inside `pytest`. `collect()` imports `pyinfra_cli`,
+  which calls `gevent.monkey.patch_all()`; that leaves the stdlib `Popen` that
+  `pytest-ruff` captured unable to fork, so every ruff check item raised
+  `TypeError: 'NoneType' object is not callable`. Ruff is still enforced by the
+  dedicated CI step and the pre-commit hooks.
 - `register()` is renamed to `gather()`; `FactCollector.collect()` is renamed to
   `FactCollector.gather()` to match.
 - The `collect()` deploy is now a fallback for a pyinfra that does not fire the
