@@ -25,16 +25,51 @@ Collection happens in two steps, because gathering is not a per-host operation:
 This split means a deploy can gather facts as it goes and does not need to know
 the full list up front. Gathering the same fact twice is a no-op.
 
-Step 2 happens automatically. The first `gather()` call arms a callback on the
-run, and pyinfra fires it once when the prepare phase ends, before any operation
-executes. You do not call anything to make collection happen.
+Step 2 is meant to happen automatically. The first `gather()` call arms a callback
+on the run, and pyinfra fires it once when the prepare phase ends, before any
+operation executes. You then do not call anything to make collection happen.
 
-Collection is read-only, so it also runs for a dry run (`--dry`) and for debug
-dumps (`--debug-facts`, `--debug-operations`). Those runs still fill the store.
+Collection is read-only, so on a pyinfra that fires the callback it also runs for
+a dry run (`--dry`) and for debug dumps (`--debug-facts`, `--debug-operations`).
+Those runs still fill the store.
 
-Automatic collection needs a pyinfra that fires the `prepare_end` callback. On
-an older pyinfra, call the `collect()` deploy yourself; it gathers the same
-facts. It is harmless to leave it in a deploy on a new pyinfra.
+#### Automatic collection needs pyinfra PR #2063
+
+That callback is the `prepare_end` hook, which is not in a released pyinfra yet.
+It is proposed in [pyinfra PR #2063][pr2063] (`feat(api): add prepare_end
+callback`). Until that PR lands in a release, no released pyinfra fires
+`prepare_end`, so the `gather()` call arms a callback that never runs and
+**nothing is collected**.
+
+[pr2063]: https://github.com/pyinfra-dev/pyinfra/pull/2063
+
+#### What is required today
+
+On a released pyinfra you must trigger collection yourself by calling the
+`collect()` deploy at the end of the deploy that gathered the facts. It flushes
+whatever `gather()` accumulated, once per run, before any operation executes:
+
+```python
+from pyinfra.facts import server
+from pyinfra.api.deploy import deploy
+
+from pyinfra_collector.collector import collect, gather
+
+
+@deploy()
+def gather_facts() -> None:
+    gather(server.Uptime)
+    collect()
+```
+
+Call `collect()` after the last `gather()` in the deploy, so it flushes the full
+set. It gathers from every active host and writes to the store on the first host
+only, so it runs exactly once even though a deploy runs once per host. Calling it
+more than once in a run does nothing extra.
+
+`collect()` is harmless on a pyinfra that fires `prepare_end`: the callback
+flushes the collector first, so the later `collect()` call finds nothing pending
+and returns. This means the same deploy works both with and without PR #2063.
 
 ### Example
 
@@ -66,10 +101,11 @@ def publish() -> None:
     )
 ```
 
-Run `gather_facts` and `publish` as separate pyinfra invocations. `gather_facts`
-only adds the fact; pyinfra collects it at the end of prepare. `uptimes` is then
-a mapping of node name to the latest collected value, ready for a template or for
-looping over on the controller.
+Run `gather_facts` and `publish` as separate pyinfra invocations. Without the
+prepare-end PR, add `collect()` to the end of `gather_facts` as shown above, or
+the fact is never collected. With it, `gather()` alone is enough and `collect()`
+is redundant. `uptimes` is then a mapping of node name to the latest collected
+value, ready for a template or for looping over on the controller.
 
 ### Filtering hosts
 
