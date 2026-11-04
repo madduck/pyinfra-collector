@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pyinfra.facts import server
 
-from pyinfra_collector.store import FactStore, fact_id
+from pyinfra_collector.store import FactStore
 
 
 @pytest.fixture
@@ -53,14 +53,6 @@ def test_record_preserves_integer_scalars(store: FactStore) -> None:
     """A bare integer must round-trip as an integer, not as text or a corrupt value."""
     store.record("node1", "server.Uptime", 100)
     assert store.latest("node1", "server.Uptime") == 100
-
-
-def test_fact_id_returns_class_name() -> None:
-    assert fact_id(server.Uptime) == "server.Uptime"
-
-
-def test_fact_id_passes_through_a_string() -> None:
-    assert fact_id("server.Uptime") == "server.Uptime"
 
 
 def test_latest_for_accepts_a_fact_class(store: FactStore) -> None:

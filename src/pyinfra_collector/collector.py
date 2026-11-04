@@ -21,8 +21,8 @@ from pyinfra.api.host import Host
 from pyinfra.api.state import State
 from pyinfra.context import ctx_host, ctx_state
 
-from .store import FactClass, FactStore
-from .store import fact_id as fact_id
+from .store import FactStore
+from .typedefs import FactClass, fact_id
 
 #: Decides whether a host contributes a fact. May inspect the host object,
 #: including its groups and data, and may itself call ``host.get_fact()``.

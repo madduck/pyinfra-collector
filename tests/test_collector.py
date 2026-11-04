@@ -17,8 +17,9 @@ from pyinfra.context import ctx_state
 from pyinfra.facts import server
 
 from pyinfra_collector import collector as collect_module
-from pyinfra_collector.collector import FactCollector, fact_id
+from pyinfra_collector.collector import FactCollector
 from pyinfra_collector.store import FactStore
+from pyinfra_collector.typedefs import fact_id
 
 FAKE_HOMES = {
     "@fake/node1": {"fake_responses": {re.compile(r"uname -r"): "6.1.0"}},
