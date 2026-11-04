@@ -27,3 +27,20 @@ def fact_id(fact: str | FactClass) -> str:
         The fact's registered name.
     """
     return fact if isinstance(fact, str) else fact.name
+
+
+def args_data(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return bound fact arguments as JSON-compatible data, for storing.
+
+    This is the canonical representation of a fact's bound arguments. The
+    collector writes it, and the store reads it back, so both sides agree on
+    how a call such as ``collect(server.Uptime)`` is identified.
+
+    Args:
+        args: Positional arguments the fact was called with.
+        kwargs: Keyword arguments the fact was called with.
+
+    Returns:
+        A mapping with ``args`` and ``kwargs`` keys, ready to serialise.
+    """
+    return {"args": list(args), "kwargs": kwargs}

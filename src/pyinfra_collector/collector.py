@@ -22,7 +22,7 @@ from pyinfra.api.state import State
 from pyinfra.context import ctx_host, ctx_state
 
 from .store import FactStore
-from .typedefs import FactClass, fact_id
+from .typedefs import FactClass, args_data, fact_id
 
 #: Decides whether a host contributes a fact. May inspect the host object,
 #: including its groups and data, and may itself call ``host.get_fact()``.
@@ -58,7 +58,7 @@ class FactRequest:
     @property
     def args_data(self) -> dict[str, Any]:
         """Return the bound arguments as JSON-compatible data, for storing."""
-        return {"args": list(self.args), "kwargs": self.kwargs}
+        return args_data(self.args, self.kwargs)
 
     @property
     def key(self) -> tuple[str, str]:

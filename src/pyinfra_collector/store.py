@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .typedefs import FactClass, fact_id
+from .typedefs import FactClass, args_data, fact_id
 
 DEFAULT_NAME = ".pyinfra-collector.sqlite3"
 
@@ -83,6 +83,11 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
 
 
+def _args_json(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    """Serialise bound fact arguments to the canonical stored form."""
+    return _dumps(args_data(args, kwargs))
+
+
 def _now() -> datetime:
     """Return the current time with sub-second precision, in UTC."""
     return datetime.now(UTC)
@@ -138,13 +143,20 @@ class FactStore:
             raise
         self._conn.commit()
 
-    def latest(self, node: str, fact: str, args: dict[str, Any] | None = None) -> Any:
+    def latest(
+        self,
+        node: str,
+        fact: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
         """Return the latest value of one fact, or `None` if never collected.
 
         Args:
             node: Name of the node.
             fact: Canonical fact id.
-            args: Bound arguments the fact was called with.
+            *args: Fact arguments, matching the call that collected it.
+            **kwargs: Fact keyword arguments, matching the collection call.
 
         Returns:
             The most recently collected value, or `None`.
@@ -156,7 +168,7 @@ class FactStore:
             ORDER BY collected_at DESC, id DESC
             LIMIT 1
             """,
-            (node, fact, _dumps(args or {})),
+            (node, fact, _args_json(args, kwargs)),
         ).fetchone()
         return None if row is None else json.loads(row["data"])
 
@@ -180,9 +192,11 @@ class FactStore:
         Returns:
             `True` if a new row was inserted, `False` if the value was unchanged.
         """
-        args = args or {}
         payload = _dumps(data)
         with self._transaction() as conn:
+            # Built inside the transaction so a serialisation failure rolls back
+            # through the same path as a write failure.
+            bound = _dumps(args) if args is not None else _args_json((), {})
             previous = conn.execute(
                 """
                 SELECT data FROM facts
@@ -190,7 +204,7 @@ class FactStore:
                 ORDER BY collected_at DESC, id DESC
                 LIMIT 1
                 """,
-                (node, fact, _dumps(args)),
+                (node, fact, bound),
             ).fetchone()
             if previous is not None and previous["data"] == payload:
                 return False
@@ -201,22 +215,31 @@ class FactStore:
                     _format_time(collected_at or _now()),
                     node,
                     fact,
-                    _dumps(args),
+                    bound,
                     payload,
                 ),
             )
         return True
 
-    def latest_for(self, fact: str | FactClass) -> dict[str, Any]:
+    def latest_for(
+        self,
+        fact: str | FactClass,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """Return the latest value of one fact for every node that reported it.
 
         Args:
             fact: A fact class, or its canonical fact id such as
                 ``server.Uptime``.
+            *args: Fact arguments, matching the call that collected it. A fact
+                collected with different arguments yields one value per argument
+                set, so the arguments select which set to read.
+            **kwargs: Fact keyword arguments, matching the collection call.
 
         Returns:
             A mapping of node name to the latest value. Nodes that never reported
-            the fact are absent.
+            the fact with these arguments are absent.
         """
         fact = fact_id(fact)
         rows = self._conn.execute(
@@ -227,16 +250,16 @@ class FactStore:
                     node,
                     data,
                     ROW_NUMBER() OVER (
-                        PARTITION BY node, fact, args
+                        PARTITION BY node
                         ORDER BY collected_at DESC, id DESC
                     ) AS rn
                 FROM facts
-                WHERE fact = ?
+                WHERE fact = ? AND args = ?
             )
             WHERE rn = 1
             ORDER BY node
             """,
-            (fact,),
+            (fact, _args_json(args, kwargs)),
         ).fetchall()
         return {row["node"]: json.loads(row["data"]) for row in rows}
 
@@ -244,14 +267,16 @@ class FactStore:
         self,
         node: str,
         fact: str,
-        args: dict[str, Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> list[Observation]:
         """Return every recorded observation of one fact, newest first.
 
         Args:
             node: Name of the node.
             fact: Canonical fact id.
-            args: Bound arguments the fact was called with.
+            *args: Fact arguments, matching the call that collected it.
+            **kwargs: Fact keyword arguments, matching the collection call.
 
         Returns:
             The observations, most recent first.
@@ -262,7 +287,7 @@ class FactStore:
             WHERE node = ? AND fact = ? AND args = ?
             ORDER BY collected_at DESC, id DESC
             """,
-            (node, fact, _dumps(args or {})),
+            (node, fact, _args_json(args, kwargs)),
         ).fetchall()
         return [
             Observation(

@@ -39,14 +39,8 @@ def test_record_keeps_changed_value(store: FactStore) -> None:
 def test_record_distinguishes_args(store: FactStore) -> None:
     store.record("node1", "files.File", "a", {"args": ["/etc/hosts"], "kwargs": {}})
     store.record("node1", "files.File", "b", {"args": ["/etc/passwd"], "kwargs": {}})
-    assert (
-        store.latest("node1", "files.File", {"args": ["/etc/hosts"], "kwargs": {}})
-        == "a"
-    )
-    assert (
-        store.latest("node1", "files.File", {"args": ["/etc/passwd"], "kwargs": {}})
-        == "b"
-    )
+    assert store.latest("node1", "files.File", "/etc/hosts") == "a"
+    assert store.latest("node1", "files.File", "/etc/passwd") == "b"
 
 
 def test_record_preserves_integer_scalars(store: FactStore) -> None:
@@ -58,6 +52,13 @@ def test_record_preserves_integer_scalars(store: FactStore) -> None:
 def test_latest_for_accepts_a_fact_class(store: FactStore) -> None:
     store.record("node1", "server.Uptime", 100)
     assert store.latest_for(server.Uptime) == {"node1": 100}
+
+
+def test_reads_see_bare_record_as_no_arguments(store: FactStore) -> None:
+    """A bare ``record`` stores the same empty-argument shape a bare read asks for."""
+    store.record("node1", "server.Uptime", 100)
+    assert store.latest("node1", "server.Uptime") == 100
+    assert store.latest_for("server.Uptime") == {"node1": 100}
 
 
 def test_latest_for_groups_by_node(store: FactStore) -> None:
@@ -76,8 +77,21 @@ def test_latest_for_takes_newest_per_node(store: FactStore) -> None:
 def test_latest_for_distinguishes_args(store: FactStore) -> None:
     store.record("node1", "files.File", "a", {"args": ["/a"], "kwargs": {}})
     store.record("node1", "files.File", "b", {"args": ["/b"], "kwargs": {}})
-    # The newest row overall, regardless of args.
-    assert store.latest_for("files.File") == {"node1": "b"}
+    assert store.latest_for("files.File", "/a") == {"node1": "a"}
+    assert store.latest_for("files.File", "/b") == {"node1": "b"}
+    # Arguments never collected are absent, not silently mixed in.
+    assert store.latest_for("files.File", "/c") == {}
+
+
+def test_reads_match_keyword_arguments(store: FactStore) -> None:
+    """Positional-only reads must not see facts collected with keywords."""
+    store.record("node1", "files.File", "a", {"args": [], "kwargs": {"path": "/a"}})
+    assert store.latest("node1", "files.File") is None
+    assert store.latest("node1", "files.File", path="/a") == "a"
+    assert store.history("node1", "files.File") == []
+    assert [o.data for o in store.history("node1", "files.File", path="/a")] == ["a"]
+    assert store.latest_for("files.File") == {}
+    assert store.latest_for("files.File", path="/a") == {"node1": "a"}
 
 
 def test_history_is_newest_first(store: FactStore) -> None:
@@ -94,9 +108,7 @@ def test_history_records_timestamp_and_args(store: FactStore) -> None:
     store.record(
         "node1", "files.File", "a", {"args": ["/a"], "kwargs": {}}, collected_at=moment
     )
-    (observation,) = store.history(
-        "node1", "files.File", {"args": ["/a"], "kwargs": {}}
-    )
+    (observation,) = store.history("node1", "files.File", "/a")
     assert observation.collected_at == moment
     assert observation.args == {"args": ["/a"], "kwargs": {}}
     assert observation.node == "node1"
@@ -173,7 +185,7 @@ def test_record_rolls_back_on_failure(
     def flaky(value: object) -> str:
         nonlocal calls
         calls += 1
-        # First call is the payload; second is the args inside the INSERT.
+        # First call is the payload; second builds the args inside the transaction.
         if calls == 2:
             raise RuntimeError("boom")
         return original(value)
