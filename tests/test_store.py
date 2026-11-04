@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -7,8 +8,9 @@ from pyinfra_collector.store import FactStore
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> FactStore:
-    return FactStore(tmp_path / "facts.sqlite3")
+def store(tmp_path: Path) -> Iterator[FactStore]:
+    with FactStore(tmp_path / "facts.sqlite3") as store:
+        yield store
 
 
 def test_record_and_latest(store: FactStore) -> None:
