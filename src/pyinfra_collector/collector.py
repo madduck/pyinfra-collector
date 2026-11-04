@@ -17,15 +17,12 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from pyinfra.api.deploy import deploy
-from pyinfra.api.facts import FactBase, ShortFactBase
 from pyinfra.api.host import Host
 from pyinfra.api.state import State
 from pyinfra.context import ctx_host, ctx_state
 
-from .store import FactStore
-
-#: A collectable fact: a plain fact or a short fact that derives from one.
-FactClass = type[FactBase[Any] | ShortFactBase[Any]]
+from .store import FactClass, FactStore
+from .store import fact_id as fact_id
 
 #: Decides whether a host contributes a fact. May inspect the host object,
 #: including its groups and data, and may itself call ``host.get_fact()``.
@@ -35,18 +32,6 @@ HostPredicate = Callable[[Host, FactClass], bool]
 def _always(_host: Host, _fact: FactClass) -> bool:
     """Include every host."""
     return True
-
-
-def fact_id(fact: FactClass) -> str:
-    """Return the canonical name of a fact class, e.g. ``server.Uptime``.
-
-    Args:
-        fact: The fact class.
-
-    Returns:
-        The fact's registered name.
-    """
-    return fact.name
 
 
 @dataclass

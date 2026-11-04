@@ -19,7 +19,25 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pyinfra.api.facts import FactBase, ShortFactBase
+
 DEFAULT_NAME = ".pyinfra-collector.sqlite3"
+
+#: A collectable fact: a plain fact or a short fact that derives from one.
+FactClass = type[FactBase[Any] | ShortFactBase[Any]]
+
+
+def fact_id(fact: str | FactClass) -> str:
+    """Return the canonical name of a fact, given its id or its class.
+
+    Args:
+        fact: A fact class, or an already-canonical fact id such as
+            ``server.Uptime``.
+
+    Returns:
+        The fact's registered name.
+    """
+    return fact if isinstance(fact, str) else fact.name
 
 
 def default_path() -> Path:
@@ -205,16 +223,18 @@ class FactStore:
             )
         return True
 
-    def latest_for(self, fact: str) -> dict[str, Any]:
+    def latest_for(self, fact: str | FactClass) -> dict[str, Any]:
         """Return the latest value of one fact for every node that reported it.
 
         Args:
-            fact: Canonical fact id.
+            fact: A fact class, or its canonical fact id such as
+                ``server.Uptime``.
 
         Returns:
             A mapping of node name to the latest value. Nodes that never reported
             the fact are absent.
         """
+        fact = fact_id(fact)
         rows = self._conn.execute(
             """
             SELECT node, data

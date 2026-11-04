@@ -82,7 +82,8 @@ arguments and values as JSON text.
 
 - `latest(node, fact, args)` — the newest value for one node and fact.
 - `latest_for(fact)` — a mapping of node name to newest value, for every node
-  that ever reported the fact.
+  that ever reported the fact. `fact` is a fact class or its canonical id,
+  e.g. `server.Uptime`.
 - `history(node, fact, args)` — every observation, newest first.
 - `record(...)` — append one observation, skipping it if unchanged.
 - `prune(keep=..., older_than=...)` — delete old observations. `keep` retains
