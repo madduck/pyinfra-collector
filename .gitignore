@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+/.coverage
+
+# Virtual environments
+.venv
+
+/.*_cache
+
+# Collected facts store
+/.pyinfra-collector.sqlite3*

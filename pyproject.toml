@@ -1,0 +1,71 @@
+[project]
+name = "pyinfra-collector"
+version = "0.1.0"
+description = "Collect pyinfra facts across the inventory into a SQLite store"
+readme = "README.md"
+authors = [
+  { name = "martin f. krafft", email = "pyinfra-collector@pobox.madduck.net" },
+]
+requires-python = ">=3.13"
+dependencies = ["pyinfra>=3.10.0"]
+
+[dependency-groups]
+dev = [
+  "bandit>=1.9.4",
+  "ipdb>=0.13.13",
+  "mypy>=2.4.1",
+  "pre-commit>=4.7.0",
+  "pytest>=9.2.0",
+  "pytest-cov>=7.1.0",
+  "pytest-ruff>=0.5",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = """
+  -ra
+  --pdbcls=IPython.terminal.debugger:TerminalPdb
+  --cov=pyinfra_collector --cov-report term-missing:skip-covered --no-cov-on-fail
+  --ruff --ruff-format --ruff-config 'lint.ignore = ["I001", "F401", "F841"]'
+"""
+log_level = "DEBUG"
+log_format = "%(name)s %(levelname)s %(message)s"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "C", "E", "F", "I", "W", "B9"]
+
+[tool.mypy]
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = "ipdb"
+ignore_missing_imports = true
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+  'def __repr__',
+  'if TYPE_CHECKING:',
+  'class .*\bProtocol\):',
+  '@overload',
+  '@(abc\.)?abstractmethod',
+  'raise NotImplementedError',
+  'raise AssertionError',
+]
+
+[tool.bandit]
+exclude_dirs = ['.venv', '.worktrees']
+skips = ["B106"]                       # do not check for hardcoded passwords anywhere
+
+[tool.bandit.assert_used]
+skips = ['*/tests/**.py', '*/integration/**.py']
