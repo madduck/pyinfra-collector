@@ -1,6 +1,6 @@
 """Collect pyinfra facts across the inventory into a SQLite store."""
 
-from .collector import FactCollector, PrepareEndFlush, collect, register
+from .collector import FactCollector, PrepareEndFlush, collect, gather
 from .store import FactStore, Observation
 
 __all__ = [
@@ -9,5 +9,5 @@ __all__ = [
     "Observation",
     "PrepareEndFlush",
     "collect",
-    "register",
+    "gather",
 ]

@@ -18,14 +18,14 @@ in a local SQLite store, where every deployment phase can read them back.
 
 Collection happens in two steps, because gathering is not a per-host operation:
 
-1. `register()` records the facts to collect. It does not touch any host.
-2. pyinfra gathers everything registered at the end of the prepare phase and
+1. `gather()` adds the facts to collect. It does not touch any host.
+2. pyinfra collects everything gathered at the end of the prepare phase and
    writes it to the store.
 
-This split means a deploy can register facts as it goes and does not need to
-know the full list up front. Registering the same fact twice is a no-op.
+This split means a deploy can gather facts as it goes and does not need to know
+the full list up front. Gathering the same fact twice is a no-op.
 
-Step 2 happens automatically. The first `register()` call arms a callback on the
+Step 2 happens automatically. The first `gather()` call arms a callback on the
 run, and pyinfra fires it once when the prepare phase ends, before any operation
 executes. You do not call anything to make collection happen.
 
@@ -45,13 +45,13 @@ from pyinfra.facts import server
 from pyinfra.operations import files
 from pyinfra.api.deploy import deploy
 
-from pyinfra_collector.collector import register
+from pyinfra_collector.collector import gather
 from pyinfra_collector.store import FactStore
 
 
 @deploy()
-def gather() -> None:
-    register(server.Uptime)
+def gather_facts() -> None:
+    gather(server.Uptime)
 
 
 @deploy()
@@ -66,19 +66,19 @@ def publish() -> None:
     )
 ```
 
-Run `gather` and `publish` as separate pyinfra invocations. `gather` only
-registers the fact; pyinfra collects it at the end of prepare. `uptimes` is then
+Run `gather_facts` and `publish` as separate pyinfra invocations. `gather_facts`
+only adds the fact; pyinfra collects it at the end of prepare. `uptimes` is then
 a mapping of node name to the latest collected value, ready for a template or for
 looping over on the controller.
 
 ### Filtering hosts
 
-`register()` takes an `include` predicate. A host contributes only when the
+`gather()` takes an `include` predicate. A host contributes only when the
 predicate returns true. The predicate receives the host and the fact class, and
 may inspect the host object, its groups and data, or gather another fact:
 
 ```python
-register(server.Uptime, include=lambda host, fact: "web" in host.groups)
+gather(server.Uptime, include=lambda host, fact: "web" in host.groups)
 ```
 
 ### The store
@@ -105,7 +105,7 @@ the collector calls it.
   the newest rows per fact tuple; `older_than` limits deletion to rows older
   than a duration. Call this from a teardown step.
 
-Pass a fact's arguments the same way you pass them to `register()`: as normal
+Pass a fact's arguments the same way you pass them to `gather()`: as normal
 positional and keyword arguments. Leave them out for a fact that takes none.
 
 `prune()` with no arguments deletes everything.

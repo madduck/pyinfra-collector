@@ -34,7 +34,7 @@ def args_data(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
 
     This is the canonical representation of a fact's bound arguments. The
     collector writes it, and the store reads it back, so both sides agree on
-    how a call such as ``collect(server.Uptime)`` is identified.
+    how a call such as ``gather(server.Uptime)`` is identified.
 
     Args:
         args: Positional arguments the fact was called with.

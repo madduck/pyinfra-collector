@@ -1,15 +1,15 @@
 """Fact collection across the inventory.
 
 Operations do not execute when they are called; they accumulate and run in a
-later phase. Collection works the same way: calling :meth:`FactCollector.collect`
-registers a fact, and :meth:`FactCollector.run` gathers everything registered so
-far. That means a deploy can register facts as it goes, without knowing the full
-list up front.
+later phase. Collection works the same way: calling :meth:`FactCollector.gather`
+adds a fact, and :meth:`FactCollector.run` gathers everything added so far. That
+means a deploy can gather facts as it goes, without knowing the full list up
+front.
 
-The first :func:`register` call arms a :class:`PrepareEndFlush` on the current
-run, and pyinfra fires it at the end of the prepare phase, so collection happens
-automatically. See :func:`collect` for the fallback when pyinfra does not fire
-the ``prepare_end`` callback.
+The first :func:`gather` call arms a :class:`PrepareEndFlush` on the current run,
+and pyinfra fires it at the end of the prepare phase, so collection happens
+automatically. See :func:`collect` for the fallback when pyinfra does not fire the
+``prepare_end`` callback.
 """
 
 from __future__ import annotations
@@ -40,10 +40,10 @@ def _always(_host: Host, _fact: FactClass) -> bool:
 
 @dataclass
 class FactRequest:
-    """A registered request to collect one fact.
+    """A request to gather one fact.
 
     Attributes:
-        fact: The fact class to collect.
+        fact: The fact class to gather.
         args: Positional arguments to pass to the fact's command.
         kwargs: Keyword arguments to pass to the fact's command.
         include: Predicate deciding which hosts contribute.
@@ -73,7 +73,7 @@ class FactRequest:
 class FactCollector:
     """Accumulates fact requests and gathers them on demand.
 
-    Registering a fact is cheap and side-effect free. Nothing is collected until
+    Adding a fact is cheap and side-effect free. Nothing is collected until
     :meth:`run` is called.
     """
 
@@ -86,19 +86,19 @@ class FactCollector:
         self.store = store
         self._pending: dict[tuple[str, str], FactRequest] = {}
 
-    def collect(
+    def gather(
         self,
         fact: FactClass,
         *args: Any,
         include: HostPredicate = _always,
         **kwargs: Any,
     ) -> None:
-        """Register a fact for collection. Does not collect now.
+        """Add a fact to gather. Does not gather it now.
 
-        Registering the same fact with the same arguments twice is a no-op.
+        Adding the same fact with the same arguments twice is a no-op.
 
         Args:
-            fact: The fact class to collect.
+            fact: The fact class to gather.
             *args: Positional arguments for the fact's command.
             include: Predicate deciding which hosts contribute.
             **kwargs: Keyword arguments for the fact's command.
@@ -108,11 +108,11 @@ class FactCollector:
 
     @property
     def pending(self) -> list[FactRequest]:
-        """Return the registered requests, in registration order."""
+        """Return the pending requests, in the order they were added."""
         return list(self._pending.values())
 
     def run(self) -> int:
-        """Collect every registered fact and persist it.
+        """Gather every pending fact and persist it.
 
         The included hosts are gathered in parallel through ``state.fact_pool``.
         The predicate is applied once, before any host is contacted, so an
@@ -164,28 +164,28 @@ class FactCollector:
         return [(host, greenlet.get()) for host, greenlet in results.items()]
 
     def reset(self) -> None:
-        """Forget all registered requests."""
+        """Forget all pending requests."""
         self._pending.clear()
 
 
-#: Requests registered by :func:`register`, flushed at the end of the prepare
-#: phase by :class:`PrepareEndFlush`. Registration is open as soon as this module
-#: is imported; the store is created on the first registration, so importing
-#: never touches the filesystem.
+#: Requests added by :func:`gather`, flushed at the end of the prepare phase by
+#: :class:`PrepareEndFlush`. Gathering is open as soon as this module is imported;
+#: the store is created on the first :func:`gather` call, so importing never
+#: touches the filesystem.
 collector: FactCollector | None = None
 
 #: States that already carry a :class:`PrepareEndFlush`. A deploy file is loaded
-#: once per host, so ``register`` runs once per host and must arm the hook only
-#: once per run.
+#: once per host, so ``gather`` runs once per host and must arm the hook only once
+#: per run.
 _armed: weakref.WeakSet[State] = weakref.WeakSet()
 
 
 def _flush() -> int:
-    """Collect every registered fact and forget the registrations.
+    """Gather every pending fact and forget the requests.
 
     Returns:
         The number of observations that changed and were stored. Zero when
-        nothing was registered.
+        nothing is pending.
     """
     if collector is None:
         return 0
@@ -195,12 +195,12 @@ def _flush() -> int:
 
 
 class PrepareEndFlush(BaseStateCallback):
-    """Collect registered facts at the end of pyinfra's prepare phase.
+    """Gather pending facts at the end of pyinfra's prepare phase.
 
     pyinfra fires ``prepare_end`` once per run, after the deploy code has run and
     change detection is done, but before any operation executes. The handler
-    gathers everything :func:`register` accumulated during prepare and writes it
-    to the store.
+    gathers everything :func:`gather` accumulated during prepare and writes it to
+    the store.
 
     Collection is read-only, so it runs for dry runs and debug dumps as well;
     the store is populated even when the run does not go on to execute.
@@ -232,21 +232,21 @@ def _arm(state: State) -> None:
     _armed.add(state)
 
 
-def register(
+def gather(
     fact: FactClass,
     *args: Any,
     include: HostPredicate = _always,
     **kwargs: Any,
 ) -> None:
-    """Register a fact for collection at the end of the prepare phase.
+    """Add a fact to gather at the end of the prepare phase.
 
-    This is the module-level counterpart of :meth:`FactCollector.collect`, for
+    This is the module-level counterpart of :meth:`FactCollector.gather`, for
     deploys that do not manage their own collector. The first call also arms a
     :class:`PrepareEndFlush` on the current state, so collection happens
     automatically and the deploy does not need to call :func:`collect`.
 
     Args:
-        fact: The fact class to collect.
+        fact: The fact class to gather.
         *args: Positional arguments for the fact's command.
         include: Predicate deciding which hosts contribute.
         **kwargs: Keyword arguments for the fact's command.
@@ -254,7 +254,7 @@ def register(
     global collector
     if collector is None:
         collector = FactCollector(FactStore())
-    collector.collect(fact, *args, include=include, **kwargs)
+    collector.gather(fact, *args, include=include, **kwargs)
 
     state = cast(State | None, ctx_state.get())  # type: ignore[no-untyped-call]
     if state is not None:
@@ -263,12 +263,12 @@ def register(
 
 @deploy()
 def collect() -> None:
-    """Gather all registered facts once per run and persist them.
+    """Gather all pending facts once per run and persist them.
 
-    This is only needed when :func:`register` could not arm the automatic
-    handler, which happens when pyinfra does not fire the ``prepare_end``
-    callback. When it does, collection runs on its own and calling this deploy
-    is harmless but redundant.
+    This is only needed when :func:`gather` could not arm the automatic handler,
+    which happens when pyinfra does not fire the ``prepare_end`` callback. When
+    it does, collection runs on its own and calling this deploy is harmless but
+    redundant.
 
     A deploy runs once per host, but collection is a whole-inventory operation.
     Only the first active host triggers it, so facts are gathered exactly once.

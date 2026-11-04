@@ -55,10 +55,10 @@ def test_fact_id_uses_canonical_name() -> None:
     assert fact_id(server.Uptime) == "server.Uptime"
 
 
-def test_collect_registers_without_collecting(state: State, store: FactStore) -> None:
+def test_gather_adds_without_collecting(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
     with ctx_state.use(state):
-        collector.collect(server.Uptime)
+        collector.gather(server.Uptime)
         # Nothing gathered yet.
         assert store.latest_for("server.Uptime") == {}
     assert [request.id for request in collector.pending] == ["server.Uptime"]
@@ -66,7 +66,7 @@ def test_collect_registers_without_collecting(state: State, store: FactStore) ->
 
 def test_run_gathers_from_every_host(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion)
+    collector.gather(server.KernelVersion)
     with ctx_state.use(state):
         written = collector.run()
     assert written == 2
@@ -92,7 +92,7 @@ def test_excluded_host_is_never_contacted(tmp_path: Path) -> None:
 
     with FactStore(tmp_path / "facts.sqlite3") as store:
         collector = FactCollector(store)
-        collector.collect(
+        collector.gather(
             server.KernelVersion, include=lambda host, fact: host.name == "@fake/keep"
         )
         with ctx_state.use(state):
@@ -131,7 +131,7 @@ def test_gathering_is_parallel(tmp_path: Path) -> None:
 
     with FactStore(tmp_path / "facts.sqlite3") as store:
         collector = FactCollector(store)
-        collector.collect(server.KernelVersion)
+        collector.gather(server.KernelVersion)
         started = time.monotonic()
         with ctx_state.use(state):
             written = collector.run()
@@ -142,23 +142,23 @@ def test_gathering_is_parallel(tmp_path: Path) -> None:
     assert elapsed < count * delay / 2
 
 
-def test_duplicate_registration_is_deduplicated(state: State, store: FactStore) -> None:
+def test_duplicate_gather_is_deduplicated(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion)
-    collector.collect(server.KernelVersion)
+    collector.gather(server.KernelVersion)
+    collector.gather(server.KernelVersion)
     assert len(collector.pending) == 1
 
 
-def test_registration_distinguishes_arguments(state: State, store: FactStore) -> None:
+def test_gather_distinguishes_arguments(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion)
-    collector.collect(server.KernelVersion, "extra")
+    collector.gather(server.KernelVersion)
+    collector.gather(server.KernelVersion, "extra")
     assert len(collector.pending) == 2
 
 
 def test_include_predicate_filters_hosts(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(
+    collector.gather(
         server.KernelVersion, include=lambda host, fact: host.name.endswith("1")
     )
     with ctx_state.use(state):
@@ -177,7 +177,7 @@ def test_include_predicate_may_itself_read_facts(
         return kernel == "Linux"
 
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion, include=linux_only)
+    collector.gather(server.KernelVersion, include=linux_only)
     with ctx_state.use(state):
         collector.run()
     # The fake connector returns empty output for uname -s, so no host matches.
@@ -186,22 +186,22 @@ def test_include_predicate_may_itself_read_facts(
 
 def test_run_skips_unchanged_values(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion)
+    collector.gather(server.KernelVersion)
     with ctx_state.use(state):
         assert collector.run() == 2
         assert collector.run() == 0
 
 
-def test_reset_forgets_registrations(state: State, store: FactStore) -> None:
+def test_reset_forgets_requests(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion)
+    collector.gather(server.KernelVersion)
     collector.reset()
     assert collector.pending == []
 
 
 def test_collect_deploy_flushes_once(state: State, store: FactStore) -> None:
     collector = FactCollector(store)
-    collector.collect(server.KernelVersion)
+    collector.gather(server.KernelVersion)
     original = collect_module.collector
     collect_module.collector = collector
     try:
@@ -216,7 +216,7 @@ def test_collect_deploy_flushes_once(state: State, store: FactStore) -> None:
     }
 
 
-def test_collect_deploy_without_registrations_is_noop(
+def test_collect_deploy_without_requests_is_noop(
     state: State, store: FactStore
 ) -> None:
     original = collect_module.collector
@@ -229,14 +229,14 @@ def test_collect_deploy_without_registrations_is_noop(
     assert store.latest_for("server.KernelVersion") == {}
 
 
-def test_register_creates_collector_lazily(
+def test_gather_creates_collector_lazily(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)  # the lazy default store lives in the cwd
     original = collect_module.collector
     try:
         collect_module.collector = None
-        collect_module.register(server.KernelVersion)
+        collect_module.gather(server.KernelVersion)
         created: FactCollector = collect_module.collector  # type: ignore[assignment]
         assert [request.id for request in created.pending] == ["server.KernelVersion"]
     finally:
@@ -245,11 +245,11 @@ def test_register_creates_collector_lazily(
         collect_module.collector = original
 
 
-def test_register_reuses_existing_collector(store: FactStore) -> None:
+def test_gather_reuses_existing_collector(store: FactStore) -> None:
     original = collect_module.collector
     collect_module.collector = FactCollector(store)
     try:
-        collect_module.register(server.KernelVersion)
+        collect_module.gather(server.KernelVersion)
         created = collect_module.collector
         assert created is not None
         assert created.store is store
@@ -258,7 +258,7 @@ def test_register_reuses_existing_collector(store: FactStore) -> None:
         collect_module.collector = original
 
 
-def test_register_arms_prepare_end_once(
+def test_gather_arms_prepare_end_once(
     state: State, store: FactStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A deploy file runs once per host; arming must still happen once per run."""
@@ -266,8 +266,8 @@ def test_register_arms_prepare_end_once(
     monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
 
     with ctx_state.use(state):
-        collect_module.register(server.KernelVersion)
-        collect_module.register(server.KernelVersion)
+        collect_module.gather(server.KernelVersion)
+        collect_module.gather(server.KernelVersion)
 
     handlers = [
         handler
@@ -280,19 +280,19 @@ def test_register_arms_prepare_end_once(
 def test_prepare_end_collects_and_flushes(
     state: State, store: FactStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Firing prepare_end gathers the facts registered during prepare."""
+    """Firing prepare_end gathers the facts added during prepare."""
     monkeypatch.setattr(collect_module, "collector", FactCollector(store))
     monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
 
     with ctx_state.use(state):
-        collect_module.register(server.KernelVersion)
+        collect_module.gather(server.KernelVersion)
         state.trigger_callbacks("prepare_end")
 
     assert store.latest_for("server.KernelVersion") == {
         "@fake/node1": "6.1.0",
         "@fake/node2": "6.2.0",
     }
-    # The flush forgets the registrations, so a second run does not re-collect.
+    # The flush forgets the requests, so a second run does not gather again.
     assert collect_module.collector is not None
     assert collect_module.collector.pending == []
 
@@ -309,7 +309,7 @@ def test_prepare_end_collects_on_dry_and_debug_runs(
     monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
 
     with ctx_state.use(state):
-        collect_module.register(server.KernelVersion)
+        collect_module.gather(server.KernelVersion)
         state.trigger_callbacks("prepare_end", **flags)
 
     assert store.latest_for("server.KernelVersion") == {
@@ -318,7 +318,7 @@ def test_prepare_end_collects_on_dry_and_debug_runs(
     }
 
 
-def test_register_without_state_does_not_arm(
+def test_gather_without_state_does_not_arm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Registration outside a run has no state to arm, and must still work."""
@@ -326,12 +326,12 @@ def test_register_without_state_does_not_arm(
     monkeypatch.setattr(collect_module, "collector", None)
     monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
 
-    collect_module.register(server.KernelVersion)
+    collect_module.gather(server.KernelVersion)
 
     assert collect_module.collector is not None
     assert len(collect_module._armed) == 0
     collect_module.collector.store.close()
 
 
-def test_flush_without_registrations_is_noop() -> None:
+def test_flush_without_requests_is_noop() -> None:
     assert collect_module._flush() == 0
