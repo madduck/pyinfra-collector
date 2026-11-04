@@ -46,7 +46,15 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
+module = ["gevent", "gevent.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "ipdb"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pyinfra_cli.*"
 ignore_missing_imports = true
 
 [tool.coverage.run]
