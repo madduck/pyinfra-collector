@@ -8,7 +8,7 @@ It's all work-in-progress, expect more resources and docs soon.
 ## Collecting facts across the inventory
 
 A pyinfra fact is gathered from one host at a time. Sometimes a deploy needs the
-values from *every* host on the controller side, for example to fill one
+values from _every_ host on the controller side, for example to fill one
 template with the uptime of the whole fleet.
 
 The `pyinfra_collector.collector` module gathers such values once and keeps them
@@ -19,13 +19,15 @@ in a local SQLite store, where every deployment phase can read them back.
 Collection happens in two steps, because gathering is not a per-host operation:
 
 1. `register()` records the facts to collect. It does not touch any host.
-2. The `collect()` deploy gathers everything registered, once per run, and writes
-   it to the store.
+2. The `collect()` deploy gathers everything registered, once per run, and
+   writes it to the store.
 
 This split means a deploy can register facts as it goes and does not need to
 know the full list up front. Registering the same fact twice is a no-op.
 
 ### Example
+
+This is silly, but you get the point:
 
 ```python
 from pyinfra.facts import server
@@ -45,11 +47,11 @@ def gather() -> None:
 @deploy()
 def publish() -> None:
     with FactStore() as store:
-        uptimes = store.latest_for("server.Uptime")
+        uptimes = store.latest_for(server.Uptime)
 
     files.template(
         src="uptimes.j2",
-        dest="/var/cache/pyinfra-collector/uptimes",
+        dest="/var/tmp/uptimes",
         uptimes=uptimes,
     )
 ```
@@ -82,8 +84,8 @@ arguments and values as JSON text.
 
 - `latest(node, fact, args)` — the newest value for one node and fact.
 - `latest_for(fact)` — a mapping of node name to newest value, for every node
-  that ever reported the fact. `fact` is a fact class or its canonical id,
-  e.g. `server.Uptime`.
+  that ever reported the fact. `fact` is a fact class or its canonical id, e.g.
+  `server.Uptime`.
 - `history(node, fact, args)` — every observation, newest first.
 - `record(...)` — append one observation, skipping it if unchanged.
 - `prune(keep=..., older_than=...)` — delete old observations. `keep` retains
@@ -99,8 +101,8 @@ arguments and values as JSON text.
 - Values are gathered at collection time and may be stale by the time they are
   read. Read them in a phase that runs after the values could change, or collect
   again.
-- Hosts are gathered in parallel through pyinfra's fact pool. Usable
-  parallelism follows pyinfra's `PARALLEL` configuration.
+- Hosts are gathered in parallel through pyinfra's fact pool. Usable parallelism
+  follows pyinfra's `PARALLEL` configuration.
 - Writing to the store is serial, one row at a time.
 
 ## Legalese
