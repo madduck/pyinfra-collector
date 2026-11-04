@@ -19,11 +19,22 @@ in a local SQLite store, where every deployment phase can read them back.
 Collection happens in two steps, because gathering is not a per-host operation:
 
 1. `register()` records the facts to collect. It does not touch any host.
-2. The `collect()` deploy gathers everything registered, once per run, and
+2. pyinfra gathers everything registered at the end of the prepare phase and
    writes it to the store.
 
 This split means a deploy can register facts as it goes and does not need to
 know the full list up front. Registering the same fact twice is a no-op.
+
+Step 2 happens automatically. The first `register()` call arms a callback on the
+run, and pyinfra fires it once when the prepare phase ends, before any operation
+executes. You do not call anything to make collection happen.
+
+Collection is read-only, so it also runs for a dry run (`--dry`) and for debug
+dumps (`--debug-facts`, `--debug-operations`). Those runs still fill the store.
+
+Automatic collection needs a pyinfra that fires the `prepare_end` callback. On
+an older pyinfra, call the `collect()` deploy yourself; it gathers the same
+facts. It is harmless to leave it in a deploy on a new pyinfra.
 
 ### Example
 
@@ -34,14 +45,13 @@ from pyinfra.facts import server
 from pyinfra.operations import files
 from pyinfra.api.deploy import deploy
 
-from pyinfra_collector.collector import collect, register
+from pyinfra_collector.collector import register
 from pyinfra_collector.store import FactStore
 
 
 @deploy()
 def gather() -> None:
     register(server.Uptime)
-    collect()
 
 
 @deploy()
@@ -56,8 +66,9 @@ def publish() -> None:
     )
 ```
 
-Run `gather` and `publish` as separate pyinfra invocations. `uptimes` is then a
-mapping of node name to the latest collected value, ready for a template or for
+Run `gather` and `publish` as separate pyinfra invocations. `gather` only
+registers the fact; pyinfra collects it at the end of prepare. `uptimes` is then
+a mapping of node name to the latest collected value, ready for a template or for
 looping over on the controller.
 
 ### Filtering hosts

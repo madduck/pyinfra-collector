@@ -6,19 +6,23 @@ registers a fact, and :meth:`FactCollector.run` gathers everything registered so
 far. That means a deploy can register facts as it goes, without knowing the full
 list up front.
 
-The :func:`collect` deploy flushes the accumulated registrations once per run.
+The first :func:`register` call arms a :class:`PrepareEndFlush` on the current
+run, and pyinfra fires it at the end of the prepare phase, so collection happens
+automatically. See :func:`collect` for the fallback when pyinfra does not fire
+the ``prepare_end`` callback.
 """
 
 from __future__ import annotations
 
 import json
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from pyinfra.api.deploy import deploy
 from pyinfra.api.host import Host
-from pyinfra.api.state import State
+from pyinfra.api.state import BaseStateCallback, State
 from pyinfra.context import ctx_host, ctx_state
 
 from .store import FactStore
@@ -164,10 +168,68 @@ class FactCollector:
         self._pending.clear()
 
 
-#: Requests registered by :func:`register`, flushed by the :func:`collect`
-#: deploy. Registration is open as soon as this module is imported; the store is
-#: created on the first flush, so importing never touches the filesystem.
+#: Requests registered by :func:`register`, flushed at the end of the prepare
+#: phase by :class:`PrepareEndFlush`. Registration is open as soon as this module
+#: is imported; the store is created on the first registration, so importing
+#: never touches the filesystem.
 collector: FactCollector | None = None
+
+#: States that already carry a :class:`PrepareEndFlush`. A deploy file is loaded
+#: once per host, so ``register`` runs once per host and must arm the hook only
+#: once per run.
+_armed: weakref.WeakSet[State] = weakref.WeakSet()
+
+
+def _flush() -> int:
+    """Collect every registered fact and forget the registrations.
+
+    Returns:
+        The number of observations that changed and were stored. Zero when
+        nothing was registered.
+    """
+    if collector is None:
+        return 0
+    written = collector.run()
+    collector.reset()
+    return written
+
+
+class PrepareEndFlush(BaseStateCallback):
+    """Collect registered facts at the end of pyinfra's prepare phase.
+
+    pyinfra fires ``prepare_end`` once per run, after the deploy code has run and
+    change detection is done, but before any operation executes. The handler
+    gathers everything :func:`register` accumulated during prepare and writes it
+    to the store.
+
+    Collection is read-only, so it runs for dry runs and debug dumps as well;
+    the store is populated even when the run does not go on to execute.
+    """
+
+    def prepare_end(self, state: State, dry: bool = False, debug: bool = False) -> None:
+        """Flush the module collector.
+
+        Args:
+            state: The current run's state. Unused; collection reads the host
+                and state context globals itself.
+            dry: Whether the run is a dry run. Recorded but not acted on, since
+                collecting facts changes nothing on the hosts.
+            debug: Whether the run dumps facts or operations and exits. As with
+                ``dry``, collection still happens.
+        """
+        _flush()
+
+
+def _arm(state: State) -> None:
+    """Attach a :class:`PrepareEndFlush` to `state`, at most once per state.
+
+    Args:
+        state: The state to arm.
+    """
+    if state in _armed:
+        return
+    state.add_callback_handler(PrepareEndFlush())  # type: ignore[no-untyped-call]
+    _armed.add(state)
 
 
 def register(
@@ -176,10 +238,12 @@ def register(
     include: HostPredicate = _always,
     **kwargs: Any,
 ) -> None:
-    """Register a fact for collection by the :func:`collect` deploy.
+    """Register a fact for collection at the end of the prepare phase.
 
     This is the module-level counterpart of :meth:`FactCollector.collect`, for
-    deploys that do not manage their own collector.
+    deploys that do not manage their own collector. The first call also arms a
+    :class:`PrepareEndFlush` on the current state, so collection happens
+    automatically and the deploy does not need to call :func:`collect`.
 
     Args:
         fact: The fact class to collect.
@@ -192,10 +256,19 @@ def register(
         collector = FactCollector(FactStore())
     collector.collect(fact, *args, include=include, **kwargs)
 
+    state = cast(State | None, ctx_state.get())  # type: ignore[no-untyped-call]
+    if state is not None:
+        _arm(state)
+
 
 @deploy()
 def collect() -> None:
     """Gather all registered facts once per run and persist them.
+
+    This is only needed when :func:`register` could not arm the automatic
+    handler, which happens when pyinfra does not fire the ``prepare_end``
+    callback. When it does, collection runs on its own and calling this deploy
+    is harmless but redundant.
 
     A deploy runs once per host, but collection is a whole-inventory operation.
     Only the first active host triggers it, so facts are gathered exactly once.
@@ -209,5 +282,4 @@ def collect() -> None:
     if host is not state.inventory.get_active_hosts()[0]:
         return
 
-    collector.run()
-    collector.reset()
+    _flush()

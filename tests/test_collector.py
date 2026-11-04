@@ -1,5 +1,6 @@
 import re
 import time
+import weakref
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
@@ -255,3 +256,82 @@ def test_register_reuses_existing_collector(store: FactStore) -> None:
         assert len(created.pending) == 1
     finally:
         collect_module.collector = original
+
+
+def test_register_arms_prepare_end_once(
+    state: State, store: FactStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deploy file runs once per host; arming must still happen once per run."""
+    monkeypatch.setattr(collect_module, "collector", FactCollector(store))
+    monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
+
+    with ctx_state.use(state):
+        collect_module.register(server.KernelVersion)
+        collect_module.register(server.KernelVersion)
+
+    handlers = [
+        handler
+        for handler in state.callback_handlers
+        if isinstance(handler, collect_module.PrepareEndFlush)
+    ]
+    assert len(handlers) == 1
+
+
+def test_prepare_end_collects_and_flushes(
+    state: State, store: FactStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Firing prepare_end gathers the facts registered during prepare."""
+    monkeypatch.setattr(collect_module, "collector", FactCollector(store))
+    monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
+
+    with ctx_state.use(state):
+        collect_module.register(server.KernelVersion)
+        state.trigger_callbacks("prepare_end")
+
+    assert store.latest_for("server.KernelVersion") == {
+        "@fake/node1": "6.1.0",
+        "@fake/node2": "6.2.0",
+    }
+    # The flush forgets the registrations, so a second run does not re-collect.
+    assert collect_module.collector is not None
+    assert collect_module.collector.pending == []
+
+
+@pytest.mark.parametrize("flags", [{"dry": True}, {"debug": True}])
+def test_prepare_end_collects_on_dry_and_debug_runs(
+    state: State,
+    store: FactStore,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: dict[str, bool],
+) -> None:
+    """Collection is read-only, so it happens even when no operation will run."""
+    monkeypatch.setattr(collect_module, "collector", FactCollector(store))
+    monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
+
+    with ctx_state.use(state):
+        collect_module.register(server.KernelVersion)
+        state.trigger_callbacks("prepare_end", **flags)
+
+    assert store.latest_for("server.KernelVersion") == {
+        "@fake/node1": "6.1.0",
+        "@fake/node2": "6.2.0",
+    }
+
+
+def test_register_without_state_does_not_arm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Registration outside a run has no state to arm, and must still work."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(collect_module, "collector", None)
+    monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
+
+    collect_module.register(server.KernelVersion)
+
+    assert collect_module.collector is not None
+    assert len(collect_module._armed) == 0
+    collect_module.collector.store.close()
+
+
+def test_flush_without_registrations_is_noop() -> None:
+    assert collect_module._flush() == 0

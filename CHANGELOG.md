@@ -8,8 +8,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `register()` now arms a `PrepareEndFlush` callback on the current run, so
+  pyinfra collects registered facts automatically at the end of the prepare
+  phase. Nothing new to call in a deploy.
+
 ### Changed
 
+- The `collect()` deploy is now a fallback for a pyinfra that does not fire the
+  `prepare_end` callback. It is harmless to leave in a deploy.
 - `FactStore.latest_for()` accepts a fact class as well as a canonical fact id.
 - `FactStore.latest()`, `latest_for()`, and `history()` take fact arguments as
   positional and keyword arguments, matching the `register()` call, instead of
