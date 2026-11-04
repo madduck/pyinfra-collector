@@ -14,6 +14,13 @@ and this project adheres to
   the current run, so pyinfra collects gathered facts automatically at the end of
   the prepare phase. Nothing new to call in a deploy.
 
+### Fixed
+
+- `collect()` now waits for every active host before flushing, instead of
+  letting the first host flush while the others read the store. A deploy file
+  that gathers, collects, and then reads the store in the same file no longer
+  races the read on a fresh store.
+
 ### Changed
 
 - `register()` is renamed to `gather()`; `FactCollector.collect()` is renamed to

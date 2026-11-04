@@ -63,9 +63,23 @@ def gather_facts() -> None:
 ```
 
 Call `collect()` after the last `gather()` in the deploy, so it flushes the full
-set. It gathers from every active host and writes to the store on the first host
-only, so it runs exactly once even though a deploy runs once per host. Calling it
-more than once in a run does nothing extra.
+set. Calling it more than once in a run does nothing extra.
+
+A deploy file runs once per active host, in parallel, and every host reaches
+`collect()`. Because collection is a whole-inventory operation, those calls act
+as a barrier: every host waits until the last one has arrived, then exactly one
+flushes the collector and the rest resume. That keeps a host from reading the
+store before the flush commits, and makes sure the flush covers every host's
+`gather()` calls. It is therefore safe to gather, collect, and read the store in
+the same deploy file.
+
+Every active host must reach `collect()`. A deploy that calls it for only some
+of the active hosts leaves the barrier waiting forever. A module-level call is
+reached by every active host, which is the intended use. The barrier also relies
+on the hosts' deploy runs overlapping, which holds with the default `PARALLEL`
+(at least the number of active hosts). If you set `PARALLEL` below the host
+count, gather and collect in one deploy file and read the store in the next
+instead.
 
 `collect()` is harmless on a pyinfra that fires `prepare_end`: the callback
 flushes the collector first, so the later `collect()` call finds nothing pending

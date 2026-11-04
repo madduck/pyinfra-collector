@@ -1,3 +1,4 @@
+import json
 import re
 import time
 import weakref
@@ -5,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
+import gevent
 import pytest
 from pyinfra.api.config import Config
 from pyinfra.api.connect import connect_all
@@ -16,6 +18,7 @@ from pyinfra.api.state import State
 from pyinfra.connectors.fake import FakeConnector
 from pyinfra.context import ctx_state
 from pyinfra.facts import server
+from pyinfra_cli.util import load_deploy_file
 
 from pyinfra_collector import collector as collect_module
 from pyinfra_collector.collector import FactCollector
@@ -335,3 +338,141 @@ def test_gather_without_state_does_not_arm(
 
 def test_flush_without_requests_is_noop() -> None:
     assert collect_module._flush() == 0
+
+
+BARRIER_DEPLOY = """
+import json
+from pathlib import Path
+
+from pyinfra.context import ctx_host
+from pyinfra.facts import server
+from pyinfra_collector.collector import collect, gather
+from pyinfra_collector.store import FactStore
+
+gather(server.KernelVersion)
+collect()
+
+with FactStore() as store:
+    data = store.latest_for(server.KernelVersion)
+
+name = ctx_host.get().name
+Path({out!r}).joinpath(name.replace("/", "_")).write_text(json.dumps(data))
+"""
+
+
+@pytest.fixture
+def parallel_state() -> Iterator[State]:
+    """Four fake hosts, enough for the parallel load to race."""
+    inventory = Inventory(  # type: ignore[no-untyped-call]
+        (
+            [
+                (
+                    f"@fake/node{i}",
+                    {
+                        "fake_responses": {re.compile(r"uname -r"): "6.1.0"},
+                        "fake_delay": 0,
+                    },
+                )
+                for i in range(4)
+            ],
+            {},
+        )
+    )
+    state = State(inventory, Config())  # type: ignore[no-untyped-call]
+    connect_all(state)
+    yield state
+
+
+def test_collect_deploy_barriers_parallel_hosts(
+    parallel_state: State, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every host reads the store only after the single flush commits.
+
+    The deploy file runs once per host in parallel. Without the barrier one host
+    flushes and the rest read an empty store before the flush commits.
+    """
+    monkeypatch.chdir(tmp_path)  # the lazy default store lives in the cwd
+    monkeypatch.setattr(collect_module, "collector", None)
+    monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
+    monkeypatch.setattr(collect_module, "_barriers", weakref.WeakKeyDictionary())
+
+    out = tmp_path / "out"
+    out.mkdir()
+    deploy_file = tmp_path / "deploy.py"
+    deploy_file.write_text(BARRIER_DEPLOY.format(out=str(out)))
+
+    flushes: list[int] = []
+    original_flush = collect_module._flush
+
+    def counting_flush() -> int:
+        flushes.append(1)
+        return original_flush()
+
+    monkeypatch.setattr(collect_module, "_flush", counting_flush)
+
+    with ctx_state.use(parallel_state):
+        load_deploy_file(parallel_state, str(deploy_file))
+
+    results = {path.name: json.loads(path.read_text()) for path in out.iterdir()}
+    assert set(results) == {
+        "@fake_node0",
+        "@fake_node1",
+        "@fake_node2",
+        "@fake_node3",
+    }
+    assert all(len(values) == 4 for values in results.values())
+    assert len(flushes) == 1
+
+
+def test_barrier_blocks_until_last_arrival(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first arrivals wait; only the last one flushes."""
+    flushes: list[int] = []
+
+    def counting_flush() -> int:
+        flushes.append(1)
+        return 0
+
+    monkeypatch.setattr(collect_module, "_flush", counting_flush)
+
+    order: list[str] = []
+    barrier = collect_module._CollectBarrier(expected=2)
+
+    def waiter() -> None:
+        barrier.wait()
+        order.append("waiter")
+
+    def flusher() -> None:
+        barrier.wait()
+        order.append("flusher")
+
+    waiter_greenlet = gevent.spawn(waiter)
+    gevent.sleep(0)  # let the waiter arrive and block
+    assert order == []
+    assert flushes == []
+
+    flusher_greenlet = gevent.spawn(flusher)
+    waiter_greenlet.join()
+    flusher_greenlet.join()
+
+    assert flushes == [1]
+    assert set(order) == {"waiter", "flusher"}
+
+
+def test_barrier_ignores_calls_after_flush(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once a flush happened, a later call does nothing."""
+    flushes: list[int] = []
+
+    def counting_flush() -> int:
+        flushes.append(1)
+        return 0
+
+    monkeypatch.setattr(collect_module, "_flush", counting_flush)
+
+    barrier = collect_module._CollectBarrier(expected=1)
+    barrier.wait()
+    barrier.wait()
+    assert flushes == [1]

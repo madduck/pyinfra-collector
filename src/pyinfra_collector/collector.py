@@ -20,6 +20,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from gevent import getcurrent
+from gevent.event import Event
 from pyinfra.api.deploy import deploy
 from pyinfra.api.host import Host
 from pyinfra.api.state import BaseStateCallback, State
@@ -180,6 +182,53 @@ collector: FactCollector | None = None
 _armed: weakref.WeakSet[State] = weakref.WeakSet()
 
 
+class _CollectBarrier:
+    """Coordinates the single flush among the parallel per-host deploy runs.
+
+    A deploy file runs once per active host, in parallel greenlets, and every
+    run reaches :func:`collect`. Collection is a whole-inventory operation, and
+    it must cover every host's :func:`gather` calls, so no host may read the
+    store before the flush commits. Each arrival is recorded; the final one
+    performs the flush and releases the rest.
+    """
+
+    def __init__(self, expected: int) -> None:
+        """Create a barrier that waits for `expected` arrivals.
+
+        Args:
+            expected: Number of active hosts that will reach :func:`collect`.
+        """
+        self.expected = expected
+        self.arrivals = 0
+        self._done = Event()
+
+    def wait(self) -> None:
+        """Record one arrival, flushing once every host has arrived.
+
+        Every arrival but the last blocks until the flush commits. The last
+        arrival runs the flush, then releases the waiters. If a flush already
+        happened this run, a later call does nothing.
+        """
+        if self._done.is_set():
+            return
+        self.arrivals += 1
+        if self.arrivals < self.expected:
+            self._done.wait()
+            return
+        try:
+            _flush()
+        finally:
+            self._done.set()
+
+
+#: The collect barrier for each run, created on first :func:`collect` and held
+#: until the run's state is garbage collected. A deploy file runs once per host,
+#: so the arrivals must be counted per run, not in a module global.
+_barriers: weakref.WeakKeyDictionary[State, _CollectBarrier] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def _flush() -> int:
     """Gather every pending fact and forget the requests.
 
@@ -192,6 +241,32 @@ def _flush() -> int:
     written = collector.run()
     collector.reset()
     return written
+
+
+def _barrier_for(state: State) -> _CollectBarrier | None:
+    """Return the run's collect barrier, or `None` outside a parallel load.
+
+    pyinfra loads a deploy file in one greenlet per host, all spawned on
+    ``state.pool``. Only there do the per-host runs race, so only there is a
+    barrier needed and safe. ``add_deploy`` (the Python API) runs the deploy
+    serially on the caller's greenlet, where waiting for other arrivals would
+    deadlock; that path keeps the first-host flush below.
+
+    Args:
+        state: The current run's state.
+
+    Returns:
+        The barrier for this run, created on first use, or `None` when not
+        running inside a pool-spawned load greenlet.
+    """
+    if getcurrent() not in state.pool.greenlets:
+        return None
+    try:
+        return _barriers[state]
+    except KeyError:
+        barrier = _CollectBarrier(len(state.inventory.get_active_hosts()))
+        _barriers[state] = barrier
+        return barrier
 
 
 class PrepareEndFlush(BaseStateCallback):
@@ -270,16 +345,30 @@ def collect() -> None:
     it does, collection runs on its own and calling this deploy is harmless but
     redundant.
 
-    A deploy runs once per host, but collection is a whole-inventory operation.
-    Only the first active host triggers it, so facts are gathered exactly once.
-    The collector is flushed, so a second call in the same run does nothing.
+    A deploy file runs once per active host, in parallel, and every active host
+    reaches this call. Because collection is a whole-inventory operation, the
+    calls act as a barrier: every host waits until the last one has arrived, then
+    exactly one flushes the collector and the rest resume. Waiting for all
+    arrivals matters: a host that flushed on its own would miss the facts a later
+    host's :func:`gather` call has still to add. No host reads the store before
+    the flush commits.
+
+    Every active host must reach this call. A deploy that calls it for only some
+    of the active hosts leaves the barrier waiting forever. A module-level call
+    is reached by every active host, which is the intended use.
     """
     if collector is None:
         return
 
     state = cast(State, ctx_state.get())  # type: ignore[no-untyped-call]
+    barrier = _barrier_for(state)
+    if barrier is not None:
+        barrier.wait()
+        return
+
+    # ``add_deploy`` runs the deploy serially on the caller's greenlet, with no
+    # parallel runs to synchronise. Flush on the first active host instead.
     host = cast(Host, ctx_host.get())  # type: ignore[no-untyped-call]
     if host is not state.inventory.get_active_hosts()[0]:
         return
-
     _flush()
