@@ -88,7 +88,8 @@ arguments and values as JSON text.
   for every node that ever reported the fact with those arguments. `fact` is a
   fact class or its canonical id, e.g. `server.Uptime`.
 - `history(node, fact, *args, **kwargs)` — every observation, newest first.
-- `record(...)` — append one observation, skipping it if unchanged.
+- `_record(...)` — append one observation, skipping it if unchanged. Internal;
+the collector calls it.
 - `prune(keep=..., older_than=...)` — delete old observations. `keep` retains
   the newest rows per fact tuple; `older_than` limits deletion to rows older
   than a duration. Call this from a teardown step.

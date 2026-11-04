@@ -124,7 +124,7 @@ class FactCollector:
         written = 0
         for request in self.pending:
             for host, data in self._gather(state, request, hosts):
-                if self.store.record(host.name, request.id, data, request.args_data):
+                if self.store._record(host.name, request.id, data, request.args_data):
                     written += 1
         return written
 

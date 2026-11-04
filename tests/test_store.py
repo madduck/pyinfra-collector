@@ -15,7 +15,7 @@ def store(tmp_path: Path) -> Iterator[FactStore]:
 
 
 def test_record_and_latest(store: FactStore) -> None:
-    assert store.record("node1", "server.Uptime", 100)
+    assert store._record("node1", "server.Uptime", 100)
     assert store.latest("node1", "server.Uptime") == 100
 
 
@@ -24,59 +24,59 @@ def test_latest_returns_none_when_unknown(store: FactStore) -> None:
 
 
 def test_record_skips_unchanged_value(store: FactStore) -> None:
-    assert store.record("node1", "server.Uptime", 100)
-    assert not store.record("node1", "server.Uptime", 100)
+    assert store._record("node1", "server.Uptime", 100)
+    assert not store._record("node1", "server.Uptime", 100)
     assert len(store.history("node1", "server.Uptime")) == 1
 
 
 def test_record_keeps_changed_value(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    assert store.record("node1", "server.Uptime", 200)
+    store._record("node1", "server.Uptime", 100)
+    assert store._record("node1", "server.Uptime", 200)
     assert store.latest("node1", "server.Uptime") == 200
     assert len(store.history("node1", "server.Uptime")) == 2
 
 
 def test_record_distinguishes_args(store: FactStore) -> None:
-    store.record("node1", "files.File", "a", {"args": ["/etc/hosts"], "kwargs": {}})
-    store.record("node1", "files.File", "b", {"args": ["/etc/passwd"], "kwargs": {}})
+    store._record("node1", "files.File", "a", {"args": ["/etc/hosts"], "kwargs": {}})
+    store._record("node1", "files.File", "b", {"args": ["/etc/passwd"], "kwargs": {}})
     assert store.latest("node1", "files.File", "/etc/hosts") == "a"
     assert store.latest("node1", "files.File", "/etc/passwd") == "b"
 
 
 def test_record_preserves_integer_scalars(store: FactStore) -> None:
     """A bare integer must round-trip as an integer, not as text or a corrupt value."""
-    store.record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 100)
     assert store.latest("node1", "server.Uptime") == 100
 
 
 def test_latest_for_accepts_a_fact_class(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 100)
     assert store.latest_for(server.Uptime) == {"node1": 100}
 
 
 def test_reads_see_bare_record_as_no_arguments(store: FactStore) -> None:
-    """A bare ``record`` stores the same empty-argument shape a bare read asks for."""
-    store.record("node1", "server.Uptime", 100)
+    """A bare ``_record`` stores the same empty-argument shape a bare read asks."""
+    store._record("node1", "server.Uptime", 100)
     assert store.latest("node1", "server.Uptime") == 100
     assert store.latest_for("server.Uptime") == {"node1": 100}
 
 
 def test_latest_for_groups_by_node(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    store.record("node2", "server.Uptime", 300)
-    store.record("node1", "server.Hostname", "web1")
+    store._record("node1", "server.Uptime", 100)
+    store._record("node2", "server.Uptime", 300)
+    store._record("node1", "server.Hostname", "web1")
     assert store.latest_for("server.Uptime") == {"node1": 100, "node2": 300}
 
 
 def test_latest_for_takes_newest_per_node(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    store.record("node1", "server.Uptime", 200)
+    store._record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 200)
     assert store.latest_for("server.Uptime") == {"node1": 200}
 
 
 def test_latest_for_distinguishes_args(store: FactStore) -> None:
-    store.record("node1", "files.File", "a", {"args": ["/a"], "kwargs": {}})
-    store.record("node1", "files.File", "b", {"args": ["/b"], "kwargs": {}})
+    store._record("node1", "files.File", "a", {"args": ["/a"], "kwargs": {}})
+    store._record("node1", "files.File", "b", {"args": ["/b"], "kwargs": {}})
     assert store.latest_for("files.File", "/a") == {"node1": "a"}
     assert store.latest_for("files.File", "/b") == {"node1": "b"}
     # Arguments never collected are absent, not silently mixed in.
@@ -85,7 +85,7 @@ def test_latest_for_distinguishes_args(store: FactStore) -> None:
 
 def test_reads_match_keyword_arguments(store: FactStore) -> None:
     """Positional-only reads must not see facts collected with keywords."""
-    store.record("node1", "files.File", "a", {"args": [], "kwargs": {"path": "/a"}})
+    store._record("node1", "files.File", "a", {"args": [], "kwargs": {"path": "/a"}})
     assert store.latest("node1", "files.File") is None
     assert store.latest("node1", "files.File", path="/a") == "a"
     assert store.history("node1", "files.File") == []
@@ -95,8 +95,8 @@ def test_reads_match_keyword_arguments(store: FactStore) -> None:
 
 
 def test_history_is_newest_first(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    store.record("node1", "server.Uptime", 200)
+    store._record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 200)
     values = [
         observation.data for observation in store.history("node1", "server.Uptime")
     ]
@@ -105,7 +105,7 @@ def test_history_is_newest_first(store: FactStore) -> None:
 
 def test_history_records_timestamp_and_args(store: FactStore) -> None:
     moment = datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=UTC)
-    store.record(
+    store._record(
         "node1", "files.File", "a", {"args": ["/a"], "kwargs": {}}, collected_at=moment
     )
     (observation,) = store.history("node1", "files.File", "/a")
@@ -117,24 +117,24 @@ def test_history_records_timestamp_and_args(store: FactStore) -> None:
 
 
 def test_prune_everything(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    store.record("node1", "server.Uptime", 200)
+    store._record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 200)
     assert store.prune() == 2
     assert store.history("node1", "server.Uptime") == []
 
 
 def test_prune_keep_retains_newest_per_key(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    store.record("node1", "server.Uptime", 200)
-    store.record("node1", "server.Uptime", 300)
+    store._record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 200)
+    store._record("node1", "server.Uptime", 300)
     assert store.prune(keep=1) == 2
     assert [o.data for o in store.history("node1", "server.Uptime")] == [300]
 
 
 def test_prune_keep_per_key_independent(store: FactStore) -> None:
-    store.record("node1", "server.Uptime", 100)
-    store.record("node1", "server.Uptime", 200)
-    store.record("node2", "server.Uptime", 300)
+    store._record("node1", "server.Uptime", 100)
+    store._record("node1", "server.Uptime", 200)
+    store._record("node2", "server.Uptime", 300)
     assert store.prune(keep=1) == 1
     assert store.latest("node1", "server.Uptime") == 200
     assert store.latest("node2", "server.Uptime") == 300
@@ -142,17 +142,17 @@ def test_prune_keep_per_key_independent(store: FactStore) -> None:
 
 def test_prune_older_than(store: FactStore) -> None:
     old = datetime.now(UTC) - timedelta(days=10)
-    store.record("node1", "server.Uptime", 100, collected_at=old)
-    store.record("node1", "server.Uptime", 200)
+    store._record("node1", "server.Uptime", 100, collected_at=old)
+    store._record("node1", "server.Uptime", 200)
     assert store.prune(older_than=timedelta(days=1)) == 1
     assert [o.data for o in store.history("node1", "server.Uptime")] == [200]
 
 
 def test_prune_older_than_combined_with_keep(store: FactStore) -> None:
     old = datetime.now(UTC) - timedelta(days=10)
-    store.record("node1", "server.Uptime", 100, collected_at=old)
-    store.record("node1", "server.Uptime", 200, collected_at=old)
-    store.record("node1", "server.Uptime", 300)
+    store._record("node1", "server.Uptime", 100, collected_at=old)
+    store._record("node1", "server.Uptime", 200, collected_at=old)
+    store._record("node1", "server.Uptime", 300)
     # Both old rows qualify, but keep=2 means only one may go.
     assert store.prune(keep=2, older_than=timedelta(days=1)) == 1
     assert [o.data for o in store.history("node1", "server.Uptime")] == [300, 200]
@@ -161,7 +161,7 @@ def test_prune_older_than_combined_with_keep(store: FactStore) -> None:
 def test_store_is_reopenable(tmp_path: Path) -> None:
     path = tmp_path / "facts.sqlite3"
     with FactStore(path) as store:
-        store.record("node1", "server.Uptime", 100)
+        store._record("node1", "server.Uptime", 100)
     with FactStore(path) as store:
         assert store.latest("node1", "server.Uptime") == 100
 
@@ -192,6 +192,6 @@ def test_record_rolls_back_on_failure(
 
     monkeypatch.setattr(store_module, "_dumps", flaky)
     with pytest.raises(RuntimeError, match="boom"):
-        store.record("node1", "server.Uptime", 100)
+        store._record("node1", "server.Uptime", 100)
     monkeypatch.undo()
     assert store.history("node1", "server.Uptime") == []

@@ -172,7 +172,7 @@ class FactStore:
         ).fetchone()
         return None if row is None else json.loads(row["data"])
 
-    def record(
+    def _record(
         self,
         node: str,
         fact: str,
