@@ -60,7 +60,9 @@ Set `warn_unreachable = true`.
 
 Set `ignore_missing_imports = true` for module `ipdb`.
 
-Add project dependencies to Mypy `pre-commit` configuration.
+The Mypy pre-commit hook runs `uv run mypy .`, so it sees the project
+environment and its dependencies; there is no separate dependency list to
+maintain.
 
 ### Coverage
 
