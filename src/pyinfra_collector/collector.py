@@ -23,6 +23,7 @@ from typing import Any, cast
 from gevent import getcurrent
 from gevent.event import Event
 from pyinfra.api.deploy import deploy
+from pyinfra.api.exceptions import PyinfraError
 from pyinfra.api.host import Host
 from pyinfra.api.state import BaseStateCallback, State
 from pyinfra.context import ctx_host, ctx_state
@@ -252,19 +253,41 @@ def _barrier_for(state: State) -> _CollectBarrier | None:
     serially on the caller's greenlet, where waiting for other arrivals would
     deadlock; that path keeps the first-host flush below.
 
+    The barrier needs every active host's load greenlet to be running at once,
+    so the pool must be large enough to hold them all. When it is not, the
+    hosts that do run would block in the barrier waiting for hosts the pool
+    cannot schedule, and gevent would abort the run with an opaque ``LoopExit``.
+    That precondition is unsatisfiable, so raise instead, before blocking.
+
     Args:
         state: The current run's state.
 
     Returns:
         The barrier for this run, created on first use, or `None` when not
         running inside a pool-spawned load greenlet.
+
+    Raises:
+        PyinfraError: If the pool cannot load every active host concurrently.
     """
     if getcurrent() not in state.pool.greenlets:
         return None
+
+    expected = len(state.inventory.get_active_hosts())
+    if state.pool.size < expected:
+        raise PyinfraError(
+            "collect() needs every active host to load at the same time, but "
+            f"PARALLEL is {state.pool.size} and there are {expected} active "
+            "hosts. Pyinfra would load the hosts in waves, so the hosts that "
+            "start would wait in the collection barrier for hosts that cannot "
+            "be scheduled. Raise PARALLEL to at least the number of active "
+            "hosts, or gather and collect in one invocation and read the store "
+            "in another.",
+        )
+
     try:
         return _barriers[state]
     except KeyError:
-        barrier = _CollectBarrier(len(state.inventory.get_active_hosts()))
+        barrier = _CollectBarrier(expected)
         _barriers[state] = barrier
         return barrier
 

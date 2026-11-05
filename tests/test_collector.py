@@ -11,6 +11,7 @@ import pytest
 from pyinfra.api.config import Config
 from pyinfra.api.connect import connect_all
 from pyinfra.api.deploy import add_deploy
+from pyinfra.api.exceptions import PyinfraError
 from pyinfra.api.host import Host
 from pyinfra.api.inventory import Inventory
 from pyinfra.api.operations import run_ops
@@ -422,6 +423,49 @@ def test_collect_deploy_barriers_parallel_hosts(
     }
     assert all(len(values) == 4 for values in results.values())
     assert len(flushes) == 1
+
+
+@pytest.mark.parametrize("parallel", [1, 2, 3])
+def test_collect_deploy_rejects_small_parallel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parallel: int
+) -> None:
+    """A pool too small to load every host at once fails clearly, not by hanging.
+
+    With fewer pool slots than hosts, pyinfra loads the hosts in waves. The
+    hosts that run would block in the barrier waiting for hosts the pool cannot
+    schedule, and gevent would abort with an opaque ``LoopExit``. The run must
+    instead raise a clear error before anything blocks.
+    """
+    inventory = Inventory(  # type: ignore[no-untyped-call]
+        (
+            [
+                (
+                    f"@fake/node{i}",
+                    {
+                        "fake_responses": {re.compile(r"uname -r"): "6.1.0"},
+                        "fake_delay": 0,
+                    },
+                )
+                for i in range(4)
+            ],
+            {},
+        )
+    )
+    state = State(inventory, Config(PARALLEL=parallel))  # type: ignore[no-untyped-call]
+    connect_all(state)
+
+    monkeypatch.chdir(tmp_path)  # the lazy default store lives in the cwd
+    monkeypatch.setattr(collect_module, "collector", None)
+    monkeypatch.setattr(collect_module, "_armed", weakref.WeakSet())
+    monkeypatch.setattr(collect_module, "_barriers", weakref.WeakKeyDictionary())
+
+    out = tmp_path / "out"
+    out.mkdir()
+    deploy_file = tmp_path / "deploy.py"
+    deploy_file.write_text(BARRIER_DEPLOY.format(out=str(out)))
+
+    with ctx_state.use(state), pytest.raises(PyinfraError, match="PARALLEL"):
+        load_deploy_file(state, str(deploy_file))
 
 
 def test_barrier_blocks_until_last_arrival(

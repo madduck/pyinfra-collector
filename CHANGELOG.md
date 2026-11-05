@@ -20,6 +20,10 @@ and this project adheres to
   letting the first host flush while the others read the store. A deploy file
   that gathers, collects, and then reads the store in the same file no longer
   races the read on a fresh store.
+- `collect()` raises a `PyinfraError` when pyinfra's `PARALLEL` is smaller than
+  the number of active hosts. The collection barrier needs every host to load at
+  once, which such a run cannot do, so it would previously hang and then abort
+  with an opaque `gevent` `LoopExit`.
 
 ### Changed
 

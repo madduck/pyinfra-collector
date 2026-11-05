@@ -81,10 +81,11 @@ The barrier also needs **every host's deploy run to be in flight at the same
 time**, so pyinfra's `PARALLEL` must be at least the number of active hosts.
 With the default `PARALLEL`, pyinfra sizes the pool to the inventory, so this
 holds. If you set `PARALLEL` below the host count, pyinfra can only load a
-subset of hosts at once; the loaded hosts block in the barrier waiting for the
-hosts that cannot start, and the run deadlocks. Either leave `PARALLEL` at its
-default, set it to at least the host count, or split the work into separate
-invocations so that gathering and reading happen in different runs.
+subset of hosts at once and the collection cannot cover the inventory, so
+`collect()` raises a `PyinfraError` explaining the mismatch. Either leave
+`PARALLEL` at its default, set it to at least the host count, or split the work
+into separate invocations so that gathering and reading happen in different
+runs.
 
 `collect()` is harmless on a pyinfra that fires `prepare_end`: the callback
 flushes the collector first, so the later `collect()` call finds nothing pending

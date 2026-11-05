@@ -21,7 +21,12 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run mypy .
+        # Defence in depth, not a workaround for this repo: a hook runs outside
+        # direnv and cannot know what the caller's shell exported. An ambient
+        # UV_PROJECT_ENVIRONMENT or VIRTUAL_ENV makes uv use another project's
+        # venv, where pyinfra ships no types and mypy reports spurious errors.
+        # Clearing both keeps the check reproducible under any shell.
+        entry: env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV uv run mypy .
         language: system
         types_or: [python, pyi]
         pass_filenames: false
