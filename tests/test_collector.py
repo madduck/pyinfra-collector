@@ -97,7 +97,8 @@ def test_collection_logging_reports_only_successful_hosts(
         else:
             collector.run()
     messages = [record.getMessage() for record in caplog.records]
-    assert messages.count("--> Collecting facts from hosts...") == 1
+    assert messages.count("Collecting facts from hosts...") == 1
+    assert messages.count("") == (0 if outcome == "error" else 1)
     assert not any("--> Collected" in message for message in messages)
     available = [message for message in messages if message.endswith("] KernelVersion")]
     expected = {"success": 2, "missing": 1, "excluded": 0, "error": 0}
@@ -122,7 +123,8 @@ def test_results_log_immediately_across_requests(
         collect(server.KernelVersion)
         collect(server.Hostname)
         collect(server.KernelVersion)
-    assert caplog.messages.count("--> Collecting facts from hosts...") == 1
+    assert caplog.messages.count("Collecting facts from hosts...") == 1
+    assert caplog.messages.count("") == 2
     for i in range(4):
         for name in ("KernelVersion", "Hostname"):
             assert caplog.messages.count(f"[@fake/node{i}] {name}") == 1
@@ -394,7 +396,8 @@ def test_concurrent_and_later_callers_share_one_collection(
     assert len(caller()) == 4
     assert len(calls) == 4
     messages = [record.getMessage() for record in caplog.records]
-    assert messages.count("--> Collecting facts from hosts...") == 1
+    assert messages.count("Collecting facts from hosts...") == 1
+    assert messages.count("") == 1
     for i in range(4):
         assert messages.count(f"[@fake/node{i}] KernelVersion") == 1
 

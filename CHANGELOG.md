@@ -20,6 +20,10 @@ and this project adheres to
 
 ### Changed
 
+- The collection heading is indented within preparation output instead of
+  appearing as a separate phase. Each completed collection request adds a blank
+  line before subsequent output. Reused results do not add separators.
+
 - `collect(fact, *args, include=..., **kwargs)` collects an explicit request
   during preparation and returns successfully collected inventory values.
   It uses pyinfra's fact pool and host connectors, with concurrency bounded by

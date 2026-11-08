@@ -117,7 +117,8 @@ class FactCollector:
         regardless of deployment limits. Existing connections are reused.
         Collection-only connections close after use. Unavailable hosts are
         omitted. A heading is logged once per state, and each successful result
-        logs its short fact name with the host prefix as it arrives. Requests
+        logs its short fact name with the host prefix as it arrives. A blank
+        line follows each completed request. Requests
         remain pending until :meth:`reset` is called.
 
         Returns:
@@ -134,8 +135,10 @@ class FactCollector:
         if not vars(state).get("_pyinfra_collector_logging_started", False):
             # Mark before logging or collection can yield to another request.
             vars(state)["_pyinfra_collector_logging_started"] = True
-            logger.info(_("--> Collecting facts from hosts..."))
-        return {host.name: data for host, data in self._gather(state, request, hosts)}
+            logger.info(_("Collecting facts from hosts..."))
+        values = {host.name: data for host, data in self._gather(state, request, hosts)}
+        logger.info("")
+        return values
 
     def _gather(
         self,
@@ -243,7 +246,7 @@ def collect(
     collection completes. A collection heading is logged once per state. Each
     successful result logs its short fact name with the host prefix as it
     arrives, including at normal verbosity. Reusing a shared result does not
-    repeat these messages.
+    repeat these messages. A blank line follows each completed request.
     Unexpected errors raise for every caller without
     retrying in the same state. Persistence and missing-value policy belong
     to the caller.

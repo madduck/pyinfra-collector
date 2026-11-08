@@ -64,7 +64,14 @@ def test_cli_reports_collection(deploy_files: Path, verbosity: list[str]) -> Non
             cli, ["inventory.py", "collect.py", "--dry", *verbosity]
         )
     assert result.exit_code == 0, result.output
-    assert result.output.count("--> Collecting facts from hosts...") == 1
+    assert result.output.count("    Collecting facts from hosts...\n") == 1
+    assert "--> Collecting facts" not in result.output
+    lines = result.output.splitlines()
+    last_fact = max(
+        i for i, line in enumerate(lines) if line.endswith("] KernelVersion")
+    )
+    assert not lines[last_fact + 1].strip()
+    assert "Ready:" in lines[last_fact + 2]
     assert "--> Collected" not in result.output
     for i in range(4):
         assert result.output.count(f"[@fake/node{i}] KernelVersion\n") == 1

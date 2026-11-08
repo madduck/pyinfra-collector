@@ -84,7 +84,7 @@ Normal output prints one collection heading per pyinfra state. Each successful
 result reports its short fact name with pyinfra's host prefix as it arrives:
 
 ```text
---> Collecting facts from hosts...
+    Collecting facts from hosts...
     [lotus.rw.madduck.net] SHA512Fingerprint
     [albatross.fo.krafftwerk.de] SHA512Fingerprint
     [lotus.rw.madduck.net] KernelVersion
@@ -94,6 +94,9 @@ result reports its short fact name with pyinfra's host prefix as it arrives:
 These lines appear at all verbosity levels. Each result uses a new line.
 Results are not combined into one line per host. Their order depends on when
 hosts finish collection. There are no per-fact start or completion messages.
+The collection heading uses the same indentation as other preparation output.
+A blank line follows each completed request to separate it from later output.
+Calls that reuse a shared result do not add a blank line.
 
 Collector messages do not include fact values or arguments. Pyinfra's own
 verbose output can include fact arguments, commands, and command output.
