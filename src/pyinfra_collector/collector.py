@@ -116,8 +116,8 @@ class FactCollector:
         Selected inventory hosts are gathered through ``state.fact_pool``,
         regardless of deployment limits. Existing connections are reused.
         Collection-only connections close after use. Unavailable hosts are
-        omitted. Each request logs its start and completion with host counts.
-        Verbose fact output also names successful facts per host. Requests
+        omitted. A heading is logged once per state, and each successful result
+        logs its short fact name with the host prefix as it arrives. Requests
         remain pending until :meth:`reset` is called.
 
         Returns:
@@ -131,7 +131,10 @@ class FactCollector:
         """Gather one request and return its values without using storage."""
         state = cast(State, ctx_state.get())  # type: ignore[no-untyped-call]
         hosts = list(state.inventory)
-        logger.info(_("--> Collecting %(fact)s from hosts...") % {"fact": request.id})
+        if not vars(state).get("_pyinfra_collector_logging_started", False):
+            # Mark before logging or collection can yield to another request.
+            vars(state)["_pyinfra_collector_logging_started"] = True
+            logger.info(_("--> Collecting facts from hosts..."))
         return {host.name: data for host, data in self._gather(state, request, hosts)}
 
     def _gather(
@@ -187,8 +190,7 @@ class FactCollector:
                             return None
                     if fact_host in fact_state.failed_hosts:
                         return None
-                    if state.print_fact_info:
-                        host.log(_("Available fact: %(fact)s") % {"fact": request.id})
+                    host.log(request.fact.__name__)
                     return host, data
                 except (ConnectError, OSError, SSHException):
                     return None
@@ -200,18 +202,9 @@ class FactCollector:
         # Drain all workers before returning or raising, including their
         # connection cleanup when another host's fact raises unexpectedly.
         joinall(results)
-        collected = [
+        return [
             result for greenlet in results if (result := greenlet.get()) is not None
         ]
-        logger.info(
-            _("--> Collected %(fact)s from %(successful)s/%(selected)s selected hosts.")
-            % {
-                "fact": request.id,
-                "successful": len(collected),
-                "selected": len(selected),
-            }
-        )
-        return collected
 
     def reset(self) -> None:
         """Forget all pending requests."""
@@ -247,9 +240,10 @@ def collect(
     Results contain only hosts selected for this request. Connection and native
     fact failures omit the affected host. Deployment targets and their failure
     state do not change. Every caller receives an independent copy after
-    collection completes. Actual collections log their start and completion
-    with host counts. Verbose fact output names successful facts per host.
-    Reusing a shared result does not repeat these messages.
+    collection completes. A collection heading is logged once per state. Each
+    successful result logs its short fact name with the host prefix as it
+    arrives, including at normal verbosity. Reusing a shared result does not
+    repeat these messages.
     Unexpected errors raise for every caller without
     retrying in the same state. Persistence and missing-value policy belong
     to the caller.

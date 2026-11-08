@@ -10,9 +10,9 @@ and this project adheres to
 
 ### Added
 
-- Collection logs start and completion messages with successful and selected
-  host counts. With `-v` or higher verbosity, host-prefixed messages identify
-  each successfully collected fact. Reused results do not repeat these logs.
+- Collection prints one heading per pyinfra state and a host-prefixed short
+  fact name as each successful result arrives, including at normal verbosity.
+  Reused results do not repeat these logs.
 
 - `FactStore.record_for(fact, values, *args, **kwargs)` explicitly persists a
   node-to-value mapping and returns the number of new or changed observations.

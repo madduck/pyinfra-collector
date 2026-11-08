@@ -80,26 +80,25 @@ cached collection result.
 
 ### Collection output
 
-Normal output reports when each fact collection starts and finishes. The
-completion message gives the number of successful hosts and selected hosts:
+Normal output prints one collection heading per pyinfra state. Each successful
+result reports its short fact name with pyinfra's host prefix as it arrives:
 
 ```text
---> Collecting server.KernelVersion from hosts...
---> Collected server.KernelVersion from 4/4 selected hosts.
+--> Collecting facts from hosts...
+    [lotus.rw.madduck.net] SHA512Fingerprint
+    [albatross.fo.krafftwerk.de] SHA512Fingerprint
+    [lotus.rw.madduck.net] KernelVersion
+    [albatross.fo.krafftwerk.de] KernelVersion
 ```
 
-With `-v` or higher verbosity, each successful host also reports the available
-fact with pyinfra's host prefix:
-
-```text
-    [lotus.rw.madduck.net] Available fact: server.KernelVersion
-```
+These lines appear at all verbosity levels. Each result uses a new line.
+Results are not combined into one line per host. Their order depends on when
+hosts finish collection. There are no per-fact start or completion messages.
 
 Collector messages do not include fact values or arguments. Pyinfra's own
 verbose output can include fact arguments, commands, and command output.
-Excluded hosts do not count as selected. Hosts with connection or fact failures
-count as selected but not successful. Unexpected errors raise without a
-completion message.
+Excluded hosts and failed results do not produce a fact-name line. Successful
+`None` values do produce a line. Unexpected errors still raise.
 
 Messages appear during operation preparation, when the deploy calls
 `collect()`, not before pyinfra's preparation heading. Separate requests report

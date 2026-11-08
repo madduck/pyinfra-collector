@@ -64,14 +64,10 @@ def test_cli_reports_collection(deploy_files: Path, verbosity: list[str]) -> Non
             cli, ["inventory.py", "collect.py", "--dry", *verbosity]
         )
     assert result.exit_code == 0, result.output
-    assert result.output.count("Collecting server.KernelVersion from hosts...") == 1
-    assert (
-        result.output.count("Collected server.KernelVersion from 4/4 selected hosts.")
-        == 1
-    )
+    assert result.output.count("--> Collecting facts from hosts...") == 1
+    assert "--> Collected" not in result.output
     for i in range(4):
-        detail = f"[@fake/node{i}] Available fact: server.KernelVersion"
-        assert (detail in result.output) == bool(verbosity)
+        assert result.output.count(f"[@fake/node{i}] KernelVersion\n") == 1
 
 
 @pytest.mark.parametrize("flag", ["--dry", "--debug-facts", "--debug-operations"])

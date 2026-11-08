@@ -97,20 +97,35 @@ def test_collection_logging_reports_only_successful_hosts(
         else:
             collector.run()
     messages = [record.getMessage() for record in caplog.records]
-    assert messages.count("--> Collecting server.KernelVersion from hosts...") == 1
-    if outcome == "error":
-        assert not any("--> Collected" in message for message in messages)
-    else:
-        counts = {"success": "2/2", "missing": "1/2", "excluded": "0/0"}
-        assert (
-            f"--> Collected server.KernelVersion from {counts[outcome]} selected hosts."
-            in messages
-        )
-    available = [message for message in messages if "Available fact:" in message]
+    assert messages.count("--> Collecting facts from hosts...") == 1
+    assert not any("--> Collected" in message for message in messages)
+    available = [message for message in messages if message.endswith("] KernelVersion")]
     expected = {"success": 2, "missing": 1, "excluded": 0, "error": 0}
     assert len(available) == expected[outcome]
     assert all("@fake/node2" not in message for message in available)
     assert all("private value" not in message for message in messages)
+
+
+def test_results_log_immediately_across_requests(
+    state: State,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def get_fact(host: Host, fact: type, *args: Any, **kwargs: Any) -> Any:
+        if host.name == "@fake/node1":
+            gevent.sleep(0.01)
+            assert f"[@fake/node0] {fact.__name__}" in caplog.messages
+        return None
+
+    monkeypatch.setattr(Host, "get_fact", get_fact)
+    with ctx_state.use(state):
+        collect(server.KernelVersion)
+        collect(server.Hostname)
+        collect(server.KernelVersion)
+    assert caplog.messages.count("--> Collecting facts from hosts...") == 1
+    for i in range(4):
+        for name in ("KernelVersion", "Hostname"):
+            assert caplog.messages.count(f"[@fake/node{i}] {name}") == 1
 
 
 def test_gather_adds_without_collecting(tmp_path: Path) -> None:
@@ -379,11 +394,9 @@ def test_concurrent_and_later_callers_share_one_collection(
     assert len(caller()) == 4
     assert len(calls) == 4
     messages = [record.getMessage() for record in caplog.records]
-    assert messages.count("--> Collecting server.KernelVersion from hosts...") == 1
-    assert (
-        messages.count("--> Collected server.KernelVersion from 4/4 selected hosts.")
-        == 1
-    )
+    assert messages.count("--> Collecting facts from hosts...") == 1
+    for i in range(4):
+        assert messages.count(f"[@fake/node{i}] KernelVersion") == 1
 
 
 def test_native_get_fact_does_not_reuse_collector_cache(state: State) -> None:
