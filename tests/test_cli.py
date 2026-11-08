@@ -57,6 +57,23 @@ def deploy_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.mark.parametrize("verbosity", [[], ["-v"], ["-vv"]])
+def test_cli_reports_collection(deploy_files: Path, verbosity: list[str]) -> None:
+    with ctx_state.use(None), ctx_host.use(None), gevent.Timeout(5):
+        result = CliRunner().invoke(
+            cli, ["inventory.py", "collect.py", "--dry", *verbosity]
+        )
+    assert result.exit_code == 0, result.output
+    assert result.output.count("Collecting server.KernelVersion from hosts...") == 1
+    assert (
+        result.output.count("Collected server.KernelVersion from 4/4 selected hosts.")
+        == 1
+    )
+    for i in range(4):
+        detail = f"[@fake/node{i}] Available fact: server.KernelVersion"
+        assert (detail in result.output) == bool(verbosity)
+
+
 @pytest.mark.parametrize("flag", ["--dry", "--debug-facts", "--debug-operations"])
 def test_cli_collects_during_preparation(deploy_files: Path, flag: str) -> None:
     with ctx_state.use(None), ctx_host.use(None), gevent.Timeout(5):

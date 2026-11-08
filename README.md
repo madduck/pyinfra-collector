@@ -78,6 +78,34 @@ errors raise for every caller. Later calls for that request in the same state
 also raise rather than retrying. Explicit storage failures do not change the
 cached collection result.
 
+### Collection output
+
+Normal output reports when each fact collection starts and finishes. The
+completion message gives the number of successful hosts and selected hosts:
+
+```text
+--> Collecting server.KernelVersion from hosts...
+--> Collected server.KernelVersion from 4/4 selected hosts.
+```
+
+With `-v` or higher verbosity, each successful host also reports the available
+fact with pyinfra's host prefix:
+
+```text
+    [lotus.rw.madduck.net] Available fact: server.KernelVersion
+```
+
+Collector messages do not include fact values or arguments. Pyinfra's own
+verbose output can include fact arguments, commands, and command output.
+Excluded hosts do not count as selected. Hosts with connection or fact failures
+count as selected but not successful. Unexpected errors raise without a
+completion message.
+
+Messages appear during operation preparation, when the deploy calls
+`collect()`, not before pyinfra's preparation heading. Separate requests report
+separately. Calls that reuse a shared result do not repeat the messages.
+`FactCollector.run()` reports each queued collection in the same way.
+
 ### Collection scope
 
 `collect()` applies its predicate to every host in the inventory. Only matching

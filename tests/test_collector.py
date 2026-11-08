@@ -66,6 +66,53 @@ def isolated_collections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.mark.parametrize("outcome", ["success", "missing", "excluded", "error"])
+def test_collection_logging_reports_only_successful_hosts(
+    state: State,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    outcome: str,
+) -> None:
+    state.print_fact_info = True
+
+    def get_fact(host: Host, fact: type, *args: Any, **kwargs: Any) -> Any:
+        if outcome == "error":
+            raise ValueError("invalid fact")
+        if outcome == "missing" and host.name == "@fake/node1":
+            raise OSError("offline")
+        return "private value"
+
+    monkeypatch.setattr(Host, "get_fact", get_fact)
+    collector = FactCollector()
+    collector.gather(
+        server.KernelVersion,
+        include=lambda host, fact: (
+            outcome != "excluded" and host.name in {"@fake/node0", "@fake/node1"}
+        ),
+    )
+    with ctx_state.use(state):
+        if outcome == "error":
+            with pytest.raises(ValueError, match="invalid fact"):
+                collector.run()
+        else:
+            collector.run()
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages.count("--> Collecting server.KernelVersion from hosts...") == 1
+    if outcome == "error":
+        assert not any("--> Collected" in message for message in messages)
+    else:
+        counts = {"success": "2/2", "missing": "1/2", "excluded": "0/0"}
+        assert (
+            f"--> Collected server.KernelVersion from {counts[outcome]} selected hosts."
+            in messages
+        )
+    available = [message for message in messages if "Available fact:" in message]
+    expected = {"success": 2, "missing": 1, "excluded": 0, "error": 0}
+    assert len(available) == expected[outcome]
+    assert all("@fake/node2" not in message for message in available)
+    assert all("private value" not in message for message in messages)
+
+
 def test_gather_adds_without_collecting(tmp_path: Path) -> None:
     collector = FactCollector()
     collector.gather(server.KernelVersion)
@@ -307,7 +354,9 @@ def test_collect_fans_out_using_existing_connections(
 
 
 def test_concurrent_and_later_callers_share_one_collection(
-    state: State, monkeypatch: pytest.MonkeyPatch
+    state: State,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     calls: list[Host] = []
     original = Host.get_fact
@@ -329,6 +378,12 @@ def test_concurrent_and_later_callers_share_one_collection(
     results[0].clear()
     assert len(caller()) == 4
     assert len(calls) == 4
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages.count("--> Collecting server.KernelVersion from hosts...") == 1
+    assert (
+        messages.count("--> Collected server.KernelVersion from 4/4 selected hosts.")
+        == 1
+    )
 
 
 def test_native_get_fact_does_not_reuse_collector_cache(state: State) -> None:
