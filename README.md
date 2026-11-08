@@ -85,10 +85,10 @@ result reports its short fact name with pyinfra's host prefix as it arrives:
 
 ```text
     Collecting facts from hosts...
-    [lotus.rw.madduck.net] SHA512Fingerprint
-    [albatross.fo.krafftwerk.de] SHA512Fingerprint
-    [lotus.rw.madduck.net] KernelVersion
-    [albatross.fo.krafftwerk.de] KernelVersion
+    [lotus.rw.example.org] SHA512Fingerprint
+    [albatross.fo.example.net] SHA512Fingerprint
+    [lotus.rw.example.org] KernelVersion
+    [albatross.fo.example.net] KernelVersion
 ```
 
 These lines appear at all verbosity levels. Each result uses a new line.
