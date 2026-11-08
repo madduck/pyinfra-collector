@@ -1,38 +1,37 @@
-"""Fact collection across the inventory.
+"""Collect facts across the entire inventory before a deploy continues.
 
-Operations do not execute when they are called; they accumulate and run in a
-later phase. Collection works the same way: calling :meth:`FactCollector.gather`
-adds a fact, and :meth:`FactCollector.run` gathers everything added so far. That
-means a deploy can gather facts as it goes, without knowing the full list up
-front.
+The module-level :func:`collect` gathers one explicit request through pyinfra's
+fact pool and returns a mapping of host names to values without using storage.
+Equivalent calls in one state share a collection, including its failure. They do
+not wait for other hosts to load their deploy code.
 
-The first :func:`gather` call arms a :class:`PrepareEndFlush` on the current run,
-and pyinfra fires it at the end of the prepare phase, so collection happens
-automatically. See :func:`collect` for the fallback when pyinfra does not fire the
-``prepare_end`` callback.
+:class:`FactCollector` also supports explicit request queues for Python callers
+that manage their own collection boundary.
 """
 
 from __future__ import annotations
 
 import json
-import weakref
 from collections.abc import Callable
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
+from gettext import gettext as _
+from sys import exc_info
 from typing import Any, cast
 
-from gevent import getcurrent
-from gevent.event import Event
-from pyinfra.api.deploy import deploy
-from pyinfra.api.exceptions import PyinfraError
+from gevent import joinall
+from gevent.event import AsyncResult
+from gevent.lock import Semaphore
+from paramiko import SSHException
+from pyinfra.api.exceptions import ConnectError, PyinfraError
 from pyinfra.api.host import Host
-from pyinfra.api.state import BaseStateCallback, State
+from pyinfra.api.state import State
 from pyinfra.context import ctx_host, ctx_state
 
-from .store import FactStore
 from .typedefs import FactClass, args_data, fact_id
 
-#: Decides whether a host contributes a fact. May inspect the host object,
-#: including its groups and data, and may itself call ``host.get_fact()``.
+#: Selects hosts from the entire inventory before connection work starts.
+#: Predicates can inspect local metadata but must not read remote facts.
 HostPredicate = Callable[[Host, FactClass], bool]
 
 
@@ -64,29 +63,24 @@ class FactRequest:
 
     @property
     def args_data(self) -> dict[str, Any]:
-        """Return the bound arguments as JSON-compatible data, for storing."""
+        """Return the bound arguments as JSON-compatible data for storage."""
         return args_data(self.args, self.kwargs)
 
     @property
     def key(self) -> tuple[str, str]:
-        """Return the key identifying this request within a collector."""
+        """Return the fact and argument key identifying this request."""
         return (self.id, json.dumps(self.args_data, sort_keys=True, default=str))
 
 
 class FactCollector:
-    """Accumulates fact requests and gathers them on demand.
+    """Accumulate requests and gather them at an explicit collection boundary.
 
-    Adding a fact is cheap and side-effect free. Nothing is collected until
-    :meth:`run` is called.
+    Adding a request does not contact hosts. The caller must bind the pyinfra
+    state and call :meth:`run` after adding all requests.
     """
 
-    def __init__(self, store: FactStore) -> None:
-        """Create a collector that writes to `store`.
-
-        Args:
-            store: The store to persist collected facts in.
-        """
-        self.store = store
+    def __init__(self) -> None:
+        """Create an empty collector without opening a store."""
         self._pending: dict[tuple[str, str], FactRequest] = {}
 
     def gather(
@@ -96,9 +90,10 @@ class FactCollector:
         include: HostPredicate = _always,
         **kwargs: Any,
     ) -> None:
-        """Add a fact to gather. Does not gather it now.
+        """Add a fact to gather without contacting hosts.
 
-        Adding the same fact with the same arguments twice is a no-op.
+        Adding the same fact with the same arguments twice is a no-op. The
+        first request's predicate applies.
 
         Args:
             fact: The fact class to gather.
@@ -111,29 +106,29 @@ class FactCollector:
 
     @property
     def pending(self) -> list[FactRequest]:
-        """Return the pending requests, in the order they were added."""
+        """Return the pending requests in the order they were added."""
         return list(self._pending.values())
 
-    def run(self) -> int:
-        """Gather every pending fact and persist it.
+    def run(self) -> list[tuple[FactRequest, dict[str, Any]]]:
+        """Gather every pending fact without reading or writing storage.
 
-        The included hosts are gathered in parallel through ``state.fact_pool``.
-        The predicate is applied once, before any host is contacted, so an
-        excluded host is never touched. Writing to the store stays serial: it
-        uses one SQLite connection, which is not shared across greenlets.
+        Selected inventory hosts are gathered through ``state.fact_pool``,
+        regardless of deployment limits. Existing connections are reused.
+        Collection-only connections close after use. Unavailable hosts are
+        omitted. Requests remain pending until :meth:`reset` is called.
 
         Returns:
-            The number of observations that changed and were stored.
+            Request/result pairs in queue order. Each result maps host names
+            to collected values. The request retains the fact and arguments
+            for callers that choose to persist its result.
         """
-        state = cast(State, ctx_state.get())  # type: ignore[no-untyped-call]
-        hosts = state.inventory.get_active_hosts()
+        return [(request, self._collect(request)) for request in self.pending]
 
-        written = 0
-        for request in self.pending:
-            for host, data in self._gather(state, request, hosts):
-                if self.store._record(host.name, request.id, data, request.args_data):
-                    written += 1
-        return written
+    def _collect(self, request: FactRequest) -> dict[str, Any]:
+        """Gather one request and return its values without using storage."""
+        state = cast(State, ctx_state.get())  # type: ignore[no-untyped-call]
+        hosts = list(state.inventory)
+        return {host.name: data for host, data in self._gather(state, request, hosts)}
 
     def _gather(
         self,
@@ -141,257 +136,149 @@ class FactCollector:
         request: FactRequest,
         hosts: list[Host],
     ) -> list[tuple[Host, Any]]:
-        """Collect one fact from the hosts that pass its predicate, in parallel.
+        """Collect one fact from selected hosts through the existing fact pool.
 
         Args:
             state: The current state, providing the fact pool.
             request: The fact to collect.
-            hosts: Candidate hosts, in inventory order.
+            hosts: All inventory hosts, including non-deployment targets.
 
         Returns:
-            Pairs of host and collected value, in inventory order.
+            Successful host/value pairs in inventory order. Connection and
+            native fact failures are omitted without changing deploy targets.
         """
-        selected = [host for host in hosts if request.include(host, request.fact)]
+        selected = []
+        for host in hosts:
+            with ctx_state.use(state), ctx_host.use(host):
+                if request.include(host, request.fact):
+                    selected.append(host)
 
-        def gather_one(host: Host) -> Any:
-            # Facts may reach for the host-context global (e.g. server.Uptime
-            # reads server.Kernel), so bind the context while collecting.
-            with ctx_host.use(host):
-                return host.get_fact(request.fact, *request.args, **request.kwargs)
+        def gather_one(host: Host) -> tuple[Host, Any] | None:
+            # Different requests can collect from the same host concurrently.
+            # Serialise access to that connector, including connection cleanup.
+            lock = vars(host).setdefault("_pyinfra_collector_lock", Semaphore())
+            with lock, ctx_state.use(state), ctx_host.use(host):
+                already_connected = host.connected
+                try:
+                    host.connect(raise_exceptions=True)
+                    # Pyinfra's fact API marks hosts failed on command errors.
+                    # Keep that bookkeeping local, without replacing the real
+                    # connector or changing the deploy's active/failed hosts.
+                    fact_host = copy(host)
+                    fact_state = copy(state)
+                    fact_host.state = fact_state
+                    fact_state.active_hosts = {fact_host}
+                    fact_state.activated_hosts = {fact_host}
+                    fact_state.failed_hosts = set()
+                    with ctx_state.use(fact_state), ctx_host.use(fact_host):
+                        try:
+                            data = fact_host.get_fact(
+                                request.fact,
+                                *request.args,
+                                **(request.kwargs | {"_ignore_errors": False}),
+                            )
+                        except PyinfraError:
+                            if fact_host not in fact_state.failed_hosts:
+                                raise
+                            return None
+                    if fact_host in fact_state.failed_hosts:
+                        return None
+                    return host, data
+                except (ConnectError, OSError, SSHException):
+                    return None
+                finally:
+                    if not already_connected and host.connected:
+                        host.disconnect()
 
-        with ctx_state.use(state):
-            results = {
-                host: state.fact_pool.spawn(gather_one, host) for host in selected
-            }
-
-        return [(host, greenlet.get()) for host, greenlet in results.items()]
+        results = [state.fact_pool.spawn(gather_one, host) for host in selected]
+        # Drain all workers before returning or raising, including their
+        # connection cleanup when another host's fact raises unexpectedly.
+        joinall(results)
+        return [
+            result for greenlet in results if (result := greenlet.get()) is not None
+        ]
 
     def reset(self) -> None:
         """Forget all pending requests."""
         self._pending.clear()
 
 
-#: Requests added by :func:`gather`, flushed at the end of the prepare phase by
-#: :class:`PrepareEndFlush`. Gathering is open as soon as this module is imported;
-#: the store is created on the first :func:`gather` call, so importing never
-#: touches the filesystem.
-collector: FactCollector | None = None
+@dataclass
+class _Collection:
+    """Retain a request and its shared result for the lifetime of one state."""
 
-#: States that already carry a :class:`PrepareEndFlush`. A deploy file is loaded
-#: once per host, so ``gather`` runs once per host and must arm the hook only once
-#: per run.
-_armed: weakref.WeakSet[State] = weakref.WeakSet()
+    # Retaining the predicate prevents its identity from being reused while the
+    # cache entry exists. Different predicates must not share filtered results.
+    request: FactRequest
+    result: AsyncResult[dict[str, Any]] = field(default_factory=AsyncResult)
 
 
-class _CollectBarrier:
-    """Coordinates the single flush among the parallel per-host deploy runs.
-
-    A deploy file runs once per active host, in parallel greenlets, and every
-    run reaches :func:`collect`. Collection is a whole-inventory operation, and
-    it must cover every host's :func:`gather` calls, so no host may read the
-    store before the flush commits. Each arrival is recorded; the final one
-    performs the flush and releases the rest.
-    """
-
-    def __init__(self, expected: int) -> None:
-        """Create a barrier that waits for `expected` arrivals.
-
-        Args:
-            expected: Number of active hosts that will reach :func:`collect`.
-        """
-        self.expected = expected
-        self.arrivals = 0
-        self._done = Event()
-
-    def wait(self) -> None:
-        """Record one arrival, flushing once every host has arrived.
-
-        Every arrival but the last blocks until the flush commits. The last
-        arrival runs the flush, then releases the waiters. If a flush already
-        happened this run, a later call does nothing.
-        """
-        if self._done.is_set():
-            return
-        self.arrivals += 1
-        if self.arrivals < self.expected:
-            self._done.wait()
-            return
-        try:
-            _flush()
-        finally:
-            self._done.set()
-
-
-#: The collect barrier for each run, created on first :func:`collect` and held
-#: until the run's state is garbage collected. A deploy file runs once per host,
-#: so the arrivals must be counted per run, not in a module global.
-_barriers: weakref.WeakKeyDictionary[State, _CollectBarrier] = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def _flush() -> int:
-    """Gather every pending fact and forget the requests.
-
-    Returns:
-        The number of observations that changed and were stored. Zero when
-        nothing is pending.
-    """
-    if collector is None:
-        return 0
-    written = collector.run()
-    collector.reset()
-    return written
-
-
-def _barrier_for(state: State) -> _CollectBarrier | None:
-    """Return the run's collect barrier, or `None` outside a parallel load.
-
-    pyinfra loads a deploy file in one greenlet per host, all spawned on
-    ``state.pool``. Only there do the per-host runs race, so only there is a
-    barrier needed and safe. ``add_deploy`` (the Python API) runs the deploy
-    serially on the caller's greenlet, where waiting for other arrivals would
-    deadlock; that path keeps the first-host flush below.
-
-    The barrier needs every active host's load greenlet to be running at once,
-    so the pool must be large enough to hold them all. When it is not, the
-    hosts that do run would block in the barrier waiting for hosts the pool
-    cannot schedule, and gevent would abort the run with an opaque ``LoopExit``.
-    That precondition is unsatisfiable, so raise instead, before blocking.
-
-    Args:
-        state: The current run's state.
-
-    Returns:
-        The barrier for this run, created on first use, or `None` when not
-        running inside a pool-spawned load greenlet.
-
-    Raises:
-        PyinfraError: If the pool cannot load every active host concurrently.
-    """
-    if getcurrent() not in state.pool.greenlets:
-        return None
-
-    expected = len(state.inventory.get_active_hosts())
-    if state.pool.size < expected:
-        raise PyinfraError(
-            "collect() needs every active host to load at the same time, but "
-            f"PARALLEL is {state.pool.size} and there are {expected} active "
-            "hosts. Pyinfra would load the hosts in waves, so the hosts that "
-            "start would wait in the collection barrier for hosts that cannot "
-            "be scheduled. Raise PARALLEL to at least the number of active "
-            "hosts, or gather and collect in one invocation and read the store "
-            "in another.",
-        )
-
-    try:
-        return _barriers[state]
-    except KeyError:
-        barrier = _CollectBarrier(expected)
-        _barriers[state] = barrier
-        return barrier
-
-
-class PrepareEndFlush(BaseStateCallback):
-    """Gather pending facts at the end of pyinfra's prepare phase.
-
-    pyinfra fires ``prepare_end`` once per run, after the deploy code has run and
-    change detection is done, but before any operation executes. The handler
-    gathers everything :func:`gather` accumulated during prepare and writes it to
-    the store.
-
-    Collection is read-only, so it runs for dry runs and debug dumps as well;
-    the store is populated even when the run does not go on to execute.
-    """
-
-    def prepare_end(self, state: State, dry: bool = False, debug: bool = False) -> None:
-        """Flush the module collector.
-
-        Args:
-            state: The current run's state. Unused; collection reads the host
-                and state context globals itself.
-            dry: Whether the run is a dry run. Recorded but not acted on, since
-                collecting facts changes nothing on the hosts.
-            debug: Whether the run dumps facts or operations and exits. As with
-                ``dry``, collection still happens.
-        """
-        _flush()
-
-
-def _arm(state: State) -> None:
-    """Attach a :class:`PrepareEndFlush` to `state`, at most once per state.
-
-    Args:
-        state: The state to arm.
-    """
-    if state in _armed:
-        return
-    state.add_callback_handler(PrepareEndFlush())  # type: ignore[no-untyped-call]
-    _armed.add(state)
-
-
-def gather(
+def collect(
     fact: FactClass,
     *args: Any,
     include: HostPredicate = _always,
     **kwargs: Any,
-) -> None:
-    """Add a fact to gather at the end of the prepare phase.
+) -> dict[str, Any]:
+    """Collect one fact across the inventory without reading or writing storage.
 
-    This is the module-level counterpart of :meth:`FactCollector.gather`, for
-    deploys that do not manage their own collector. The first call also arms a
-    :class:`PrepareEndFlush` on the current state, so collection happens
-    automatically and the deploy does not need to call :func:`collect`.
+    Equivalent calls in one pyinfra state share one collection. Equivalence
+    requires the same fact id, arguments, and predicate object. The first caller
+    collects through ``state.fact_pool``, reusing existing connections and
+    connecting selected hosts as needed. Collection-only connections close
+    after use. Other callers wait for this result, not for hosts to load.
+    Collection therefore works with capped ``PARALLEL`` and in a deploy that
+    only some hosts execute. ``PARALLEL=1`` permits only serial collection.
+
+    Results contain only hosts selected for this request. Connection and native
+    fact failures omit the affected host. Deployment targets and their failure
+    state do not change. Every caller receives an independent copy after
+    collection completes. Unexpected errors raise for every caller without
+    retrying in the same state. Persistence and missing-value policy belong
+    to the caller.
 
     Args:
-        fact: The fact class to gather.
+        fact: The fact class to collect.
         *args: Positional arguments for the fact's command.
-        include: Predicate deciding which hosts contribute.
+        include: Predicate applied to every inventory host before fan-out and
+            connection work. It must use local metadata, not remote facts or a
+            connection. Reuse the same callable object for calls that must share
+            a filtered collection.
         **kwargs: Keyword arguments for the fact's command.
-    """
-    global collector
-    if collector is None:
-        collector = FactCollector(FactStore())
-    collector.gather(fact, *args, include=include, **kwargs)
 
+    Returns:
+        A mapping of selected, successful inventory host names to values.
+        Deployment limits such as ``--limit`` do not restrict collection.
+        Hosts rejected by the predicate or unavailable during collection are
+        absent. A successful ``None`` value is retained.
+
+    Raises:
+        PyinfraError: If there is no active pyinfra state.
+        BaseException: If an unexpected collection error occurs.
+    """
     state = cast(State | None, ctx_state.get())  # type: ignore[no-untyped-call]
-    if state is not None:
-        _arm(state)
+    if state is None:
+        raise PyinfraError(_("collect() requires an active pyinfra state"))
 
+    # Keep ownership on the state. A global weak-key cache would still retain
+    # failed states through exception tracebacks stored in its values.
+    collections = cast(
+        dict[tuple[str, str, int], _Collection],
+        vars(state).setdefault("_pyinfra_collector_collections", {}),
+    )
 
-@deploy()
-def collect() -> None:
-    """Gather all pending facts once per run and persist them.
+    request = FactRequest(fact=fact, args=args, kwargs=kwargs, include=include)
+    key = (*request.key, id(include))
+    try:
+        collection = collections[key]
+    except KeyError:
+        collection = _Collection(request)
+        # Publish before gathering can yield, so concurrent callers wait on the
+        # same result even when the fact pool has fewer slots than hosts.
+        collections[key] = collection
+        try:
+            collection.result.set(FactCollector()._collect(request))
+        except BaseException as error:
+            # Cancellation must also release waiters with a failure.
+            collection.result.set_exception(error, exc_info())
 
-    This is only needed when :func:`gather` could not arm the automatic handler,
-    which happens when pyinfra does not fire the ``prepare_end`` callback. When
-    it does, collection runs on its own and calling this deploy is harmless but
-    redundant.
-
-    A deploy file runs once per active host, in parallel, and every active host
-    reaches this call. Because collection is a whole-inventory operation, the
-    calls act as a barrier: every host waits until the last one has arrived, then
-    exactly one flushes the collector and the rest resume. Waiting for all
-    arrivals matters: a host that flushed on its own would miss the facts a later
-    host's :func:`gather` call has still to add. No host reads the store before
-    the flush commits.
-
-    Every active host must reach this call. A deploy that calls it for only some
-    of the active hosts leaves the barrier waiting forever. A module-level call
-    is reached by every active host, which is the intended use.
-    """
-    if collector is None:
-        return
-
-    state = cast(State, ctx_state.get())  # type: ignore[no-untyped-call]
-    barrier = _barrier_for(state)
-    if barrier is not None:
-        barrier.wait()
-        return
-
-    # ``add_deploy`` runs the deploy serially on the caller's greenlet, with no
-    # parallel runs to synchronise. Flush on the first active host instead.
-    host = cast(Host, ctx_host.get())  # type: ignore[no-untyped-call]
-    if host is not state.inventory.get_active_hosts()[0]:
-        return
-    _flush()
+    return deepcopy(collection.result.get())
