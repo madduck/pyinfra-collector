@@ -149,6 +149,8 @@ arguments and values as JSON text.
 
 `FactStore` offers:
 
+- `record_for(fact, values, *args, **kwargs)` records a node-to-value mapping.
+  It accepts a fact class or canonical id and returns the changed row count.
 - `latest(node, fact, *args, **kwargs)` — the newest value for one node and
   fact.
 - `latest_for(fact, *args, **kwargs)` — a mapping of node name to newest value,

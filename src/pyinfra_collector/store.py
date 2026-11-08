@@ -4,15 +4,16 @@ Collecting a fact from every host produces a stream of observations, not a singl
 value. This module keeps those observations as an append-only log and exposes the
 latest observation per ``(node, fact, args)`` tuple.
 
-The store is a SQLite database on the controller. The database file lives next to
-the deploy and is not part of the repository.
+The store is a SQLite database on the controller. Callers explicitly record
+mappings with :meth:`FactStore.record_for` without a pyinfra state or host
+connections. The default path is resolved against the current directory.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -102,8 +103,8 @@ class FactStore:
     """An append-only store of collected facts, backed by SQLite.
 
     The store only writes a row when the value differs from the latest value for
-    the same ``(node, fact, args)`` tuple. Repeated identical collections are
-    therefore free of growth.
+    the same ``(node, fact, args)`` tuple. Repeated identical writes do not grow
+    the store. No pyinfra state or collection lifecycle is required.
     """
 
     def __init__(self, path: Path | None = None) -> None:
@@ -171,6 +172,36 @@ class FactStore:
             (node, fact, _args_json(args, kwargs)),
         ).fetchone()
         return None if row is None else json.loads(row["data"])
+
+    def record_for(
+        self,
+        fact: str | FactClass,
+        values: Mapping[str, Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> int:
+        """Persist a mapping of node names to values for one fact.
+
+        This method works without a pyinfra state or host connections. Only
+        supplied nodes are recorded. Missing nodes remain unchanged, and
+        supplied ``None`` values are recorded normally. Each observation
+        commits separately. A later failure does not undo earlier writes.
+
+        Args:
+            fact: A fact class or its canonical id, such as ``server.Uptime``.
+            values: Node names mapped to values.
+            *args: Fact arguments, matching the collection call.
+            **kwargs: Fact keyword arguments, matching the collection call.
+
+        Returns:
+            The number of new or changed observations stored. Unchanged values
+            do not create new observations. An empty mapping returns zero.
+        """
+        name = fact_id(fact)
+        bound = args_data(args, kwargs)
+        return sum(
+            self._record(node, name, data, bound) for node, data in values.items()
+        )
 
     def _record(
         self,

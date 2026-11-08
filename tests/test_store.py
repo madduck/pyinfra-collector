@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pyinfra.context import ctx_state
 from pyinfra.facts import server
 
 from pyinfra_collector.store import FactStore
@@ -12,6 +13,52 @@ from pyinfra_collector.store import FactStore
 def store(tmp_path: Path) -> Iterator[FactStore]:
     with FactStore(tmp_path / "facts.sqlite3") as store:
         yield store
+
+
+@pytest.mark.parametrize("fact", [server.Uptime, "server.Uptime"])
+def test_record_for_accepts_collected_mapping(
+    store: FactStore, fact: str | type
+) -> None:
+    assert store.record_for(fact, {"node1": 100, "node2": None}) == 2
+    assert store.latest_for(fact) == {"node1": 100, "node2": None}
+    assert store.record_for(fact, {"node1": 100, "node2": None}) == 0
+    assert store.record_for(fact, {"node1": 200}) == 1
+    assert store.latest_for(fact) == {"node1": 200, "node2": None}
+    assert len(store.history("node1", "server.Uptime")) == 2
+
+
+def test_record_for_preserves_fact_arguments(store: FactStore) -> None:
+    assert store.record_for("files.File", {"node1": "a"}, "/a", flag=True) == 1
+    assert store.record_for("files.File", {"node1": "b"}, path="/b") == 1
+    assert store.latest_for("files.File", "/a", flag=True) == {"node1": "a"}
+    assert store.latest_for("files.File", path="/b") == {"node1": "b"}
+    assert store.latest_for("files.File") == {}
+
+
+def test_record_for_empty_mapping_does_not_delete_observations(
+    store: FactStore,
+) -> None:
+    store._record("node1", "server.Uptime", 100)
+    assert store.record_for(server.Uptime, {}) == 0
+    assert store.latest_for(server.Uptime) == {"node1": 100}
+
+
+def test_record_for_persists_without_pyinfra_state(tmp_path: Path) -> None:
+    path = tmp_path / "standalone.sqlite3"
+    with ctx_state.use(None), FactStore(path) as store:
+        assert store.record_for("server.Uptime", {"node1": 100}) == 1
+    with ctx_state.use(None), FactStore(path) as store:
+        assert store.latest_for("server.Uptime") == {"node1": 100}
+
+
+def test_record_for_failure_preserves_earlier_commits(store: FactStore) -> None:
+    class BadValue:
+        def __str__(self) -> str:
+            raise RuntimeError("value cannot be serialised")
+
+    with pytest.raises(RuntimeError, match="value cannot be serialised"):
+        store.record_for(server.Uptime, {"node1": 100, "node2": BadValue()})
+    assert store.latest_for(server.Uptime) == {"node1": 100}
 
 
 def test_record_and_latest(store: FactStore) -> None:

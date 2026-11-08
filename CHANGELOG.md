@@ -10,6 +10,10 @@ and this project adheres to
 
 ### Added
 
+- `FactStore.record_for(fact, values, *args, **kwargs)` explicitly persists a
+  node-to-value mapping and returns the number of new or changed observations.
+  It works without a pyinfra state and leaves omitted nodes unchanged.
+
 - `gather()` replaces `register()` and now arms a `PrepareEndFlush` callback on
   the current run, so pyinfra collects gathered facts automatically at the end
   of the prepare phase. Nothing new to call in a deploy.
