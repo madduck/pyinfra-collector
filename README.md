@@ -300,6 +300,24 @@ a write count.
   A write failure can leave some observations committed. The collection result
   remains available for the caller to retry persistence.
 
+## Development and releases
+
+Run `uv sync` to install the project and its development dependencies.
+Run `uv run pytest` to run the tests, and `uv build` to build distributions.
+
+Hatchling and `hatch-vcs` derive the package version from Git tags and history.
+There is no stored version number in `pyproject.toml`. A clean checkout at
+`v1.2.3` builds version `1.2.3`. Commits after a tag produce a development
+version with the commit distance and Git identifier. Uncommitted changes add
+a date suffix.
+
+Use a checkout with full Git history and tags. CI fetches both before it
+installs or builds the package. To release a version, tag the release commit
+with `vX.Y.Z`. The existing tag workflow builds and publishes the package.
+Source distributions include version metadata and can build without Git.
+A source copy without Git metadata or source-distribution metadata cannot
+determine its version.
+
 ## Legalese
 
 `pyinfra-collector` is © 2026 martin f. krafft

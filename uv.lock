@@ -1240,7 +1240,6 @@ wheels = [
 
 [[package]]
 name = "pyinfra-collector"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyinfra" },

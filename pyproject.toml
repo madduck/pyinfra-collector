@@ -1,6 +1,6 @@
 [project]
 name = "pyinfra-collector"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Collect pyinfra facts across the inventory into a SQLite store"
 readme = "README.md"
 authors = [
@@ -21,8 +21,11 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.13.0,<0.14.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.27", "hatch-vcs>=0.5"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
